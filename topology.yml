@@ -32,3 +32,8 @@ router_mappings:
   - router: router
     network: game-net
     ip: 10.10.10.1
+
+groups:
+  - name: game-nodes
+    nodes:
+      - game-server
