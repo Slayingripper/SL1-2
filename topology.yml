@@ -5,8 +5,6 @@ hosts:
       image: debian-12-x86_64
       mgmt_user: debian
     flavor: standard.large
-    volumes:
-      - size: 20
 
 routers:
   - name: router
