@@ -1,0 +1,132 @@
+services:
+  pv-controller:
+    build: .
+    image: scl-challenge-smart-home-pv
+    container_name: scl-challenge-smart-home-pv
+    restart: on-failure
+    networks:
+      playground-net:
+        ipv4_address: 172.20.0.65
+    ports:
+      - "8081:80"  # Expose PV controller admin dashboard
+      - "15002:15002" # Expose Modbus TCP for external tools using 15002
+    environment:
+      - MQTT_HOST=mosquitto
+      - MODBUS_PORT=15002
+      - BLOCK_TTL_SECONDS=60
+    volumes:
+      - ./logs:/opt/pv-controller/logs
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.connect(('127.0.0.1',80)); s.close()"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: scl-challenge-mosquitto
+    restart: on-failure
+    networks:
+      playground-net:
+        ipv4_address: 172.20.0.66
+    ports:
+      - "9001:9001"  # WebSocket for React dashboard
+    volumes:
+      - ./mosquitto-config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD", "sh", "-c", "mosquitto_sub -h 127.0.0.1 -t '$$SYS/#' -C 1 -W 1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  attacker:
+    build:
+      context: ./tools/attacker
+    image: scl-challenge-smart-home-pv-attacker
+    container_name: scl-challenge-smart-home-pv-attacker
+    restart: on-failure
+    networks:
+      playground-net:
+        ipv4_address: 172.20.0.70
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    volumes:
+      - ./tools/attacker:/home/attacker/tools
+      - ./logs:/opt/pv-controller/logs
+    tty: true
+    ports:
+      - "2224:22"  # Expose attacker SSH for remote access
+      - "8001:8001" # Expose attacker web (phishing page) for host access
+    # default command in Dockerfile will start sshd
+
+  noise:
+    build:
+      context: ./tools/noise
+    image: scl-challenge-smart-home-pv-noise
+    container_name: scl-challenge-smart-home-pv-noise
+    restart: on-failure
+    networks:
+      playground-net:
+        ipv4_address: 172.20.0.71
+    environment:
+      - MQTT_HOST=mosquitto
+    volumes:
+      - ./logs:/opt/pv-controller/logs
+    depends_on:
+      - mosquitto
+      - pv-controller
+  victim:
+    build:
+      context: ./tools/victim
+    image: scl-challenge-smart-home-pv-victim
+    container_name: scl-challenge-smart-home-pv-victim
+    restart: on-failure
+    networks:
+      playground-net:
+        ipv4_address: 172.20.0.72
+    environment:
+      PV_URL: http://pv-controller/admin
+      PV_HOST: pv-controller
+      PV_BASE_URL: http://pv-controller
+    volumes:
+      - ./logs:/opt/pv-controller/logs
+    depends_on:
+      - pv-controller
+    tty: true
+    command: ["node", "victim_runner.js"]
+  telemetry-seeder:
+    build:
+      context: ./tools/noise
+    image: scl-challenge-smart-home-pv-seeder
+    container_name: scl-challenge-smart-home-pv-seeder
+    restart: 'no'
+    networks:
+      playground-net:
+        ipv4_address: 172.20.0.73
+    environment:
+      - MQTT_HOST=mosquitto
+    volumes:
+      - ./logs:/opt/pv-controller/logs
+    command: ["python","noise_generator.py","--seed"]
+  replayer:
+    build:
+      context: ./tools/replayer
+    image: scl-challenge-smart-home-pv-replayer
+    container_name: scl-challenge-smart-home-pv-replayer
+    restart: on-failure
+    networks:
+      playground-net:
+        ipv4_address: 172.20.0.74
+    environment:
+      - PV_SERVER=http://pv-controller
+      - PCAP_PATH=/opt/pv-controller/logs/modbus.pcap
+      - REPLAYER_POLL_INTERVAL=3
+    depends_on:
+      - pv-controller
+    volumes:
+      - ./logs:/opt/pv-controller/logs
+
+networks:
+  playground-net:
+    external: true

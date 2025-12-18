@@ -1,0 +1,15 @@
+192.168.1.1 10:00:00 ARP Who has 172.20.0.65? Tell 172.20.0.1
+172.20.0.65 10:00:00 ARP reply 172.20.0.65 is at aa:bb:cc:dd:ee:ff
+172.20.0.1 10:02:30 ARP Who has 172.20.0.66? Tell 172.20.0.1
+172.20.0.66 10:02:30 ARP reply 172.20.0.66 is at 11:22:33:44:55:66
+2025-11-20 08:04:14 RECON: wifi scan
+2025-11-20 08:06:06 RECON: wifi scan
+2025-11-20 08:08:15 RECON: wifi scan
+2025-11-20 08:24:13 RECON: wifi scan
+2025-11-20 08:25:50 RECON: wifi scan
+2025-11-20 08:25:56 RECON: wifi scan
+2025-11-20 08:35:46 RECON: wifi scan
+2025-11-20 08:44:18 ARP_SPOOF: attacker started
+2025-11-20 09:37:24 RECON: wifi scan
+2025-11-20 09:38:24 RECON: wifi scan
+2025-11-20 09:38:53 RECON: wifi scan

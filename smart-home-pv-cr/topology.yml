@@ -1,0 +1,34 @@
+name: smart-home-pv-sandbox
+hosts:
+  - name: game-server
+    base_box:
+      image: debian-12-x86_64
+      mgmt_user: debian
+    flavor: standard.large
+    volumes:
+      - size: 20
+
+routers:
+  - name: router
+    base_box:
+      image: debian-12-x86_64
+      mgmt_user: debian
+    flavor: standard.small
+
+wan:
+  name: internet-connection
+  cidr: 100.100.100.0/24
+
+networks:
+  - name: game-net
+    cidr: 10.10.10.0/24
+
+net_mappings:
+  - host: game-server
+    network: game-net
+    ip: 10.10.10.5
+
+router_mappings:
+  - router: router
+    network: game-net
+    ip: 10.10.10.1

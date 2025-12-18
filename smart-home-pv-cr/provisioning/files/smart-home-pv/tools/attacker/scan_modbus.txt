@@ -1,0 +1,10 @@
+# Nmap 7.95 scan initiated Thu Nov 20 10:07:04 2025 as: /usr/lib/nmap/nmap --privileged -p 502 -sV -oN scan_modbus.txt 172.20.0.65
+Nmap scan report for scl-challenge-smart-home-pv.playground-net (172.20.0.65)
+Host is up (0.000043s latency).
+
+PORT    STATE  SERVICE VERSION
+502/tcp closed mbap
+MAC Address: F6:70:F4:D5:D3:24 (Unknown)
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+# Nmap done at Thu Nov 20 10:07:05 2025 -- 1 IP address (1 host up) scanned in 0.23 seconds

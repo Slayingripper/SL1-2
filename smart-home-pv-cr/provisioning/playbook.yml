@@ -1,0 +1,45 @@
+- hosts: game-server
+  become: yes
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install Docker and Docker Compose
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+        state: present
+
+    - name: Ensure Docker service is running
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Copy challenge files
+      copy:
+        src: files/smart-home-pv
+        dest: /opt/
+        mode: '0755'
+
+    - name: Build and start containers
+      shell: docker-compose up -d --build
+      args:
+        chdir: /opt/smart-home-pv
+
+    - name: Add message to MOTD
+      copy:
+        dest: /etc/motd
+        content: |
+          Welcome to the Smart Home PV Challenge!
+          
+          The challenge environment is running in Docker containers.
+          To access the attacker machine, SSH to port 2224:
+          ssh -p 2224 attacker@localhost
+          Password: attacker
+          
+          The PV Controller Dashboard is at http://localhost:8081
+          
+          Good luck!

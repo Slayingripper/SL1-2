@@ -1,0 +1,443 @@
+[
+  {
+    "timestamp": "2025-11-25T14:33:22.995734",
+    "reason": "malformed_type",
+    "payload": {
+      "power": "AAAA"
+    }
+  },
+  {
+    "timestamp": "2025-11-25T14:37:09.483711",
+    "reason": "impossible_power",
+    "power": 999.99,
+    "payload": {
+      "power_kw": 999.99,
+      "voltage_v": 480,
+      "current_a": 2083,
+      "timestamp": 1764081429.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T14:37:10.487337",
+    "reason": "negative_power",
+    "power": -50.0,
+    "payload": {
+      "power_kw": -50.0,
+      "voltage_v": 240,
+      "current_a": -208,
+      "timestamp": 1764081430.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T14:37:11.491088",
+    "reason": "all_zero",
+    "payload": {
+      "power_kw": 0,
+      "voltage_v": 0,
+      "current_a": 0,
+      "timestamp": 1764081431.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T14:37:12.494211",
+    "reason": "malformed_type",
+    "payload": {
+      "power_kw": "AAAA",
+      "voltage_v": null,
+      "current_a": []
+    }
+  },
+  {
+    "timestamp": "2025-11-25T14:42:46.058529",
+    "reason": "impossible_power",
+    "power": 999.99,
+    "payload": {
+      "power_kw": 999.99,
+      "voltage_v": 480,
+      "current_a": 2083,
+      "timestamp": 1764081766.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T14:42:47.062372",
+    "reason": "negative_power",
+    "power": -50.0,
+    "payload": {
+      "power_kw": -50.0,
+      "voltage_v": 240,
+      "current_a": -208,
+      "timestamp": 1764081767.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T14:42:48.066227",
+    "reason": "all_zero",
+    "payload": {
+      "power_kw": 0,
+      "voltage_v": 0,
+      "current_a": 0,
+      "timestamp": 1764081768.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T14:42:49.068988",
+    "reason": "malformed_type",
+    "payload": {
+      "power_kw": "AAAA",
+      "voltage_v": null,
+      "current_a": []
+    }
+  },
+  {
+    "timestamp": "2025-11-25T14:45:37.739908",
+    "reason": "impossible_power",
+    "power": 999.99,
+    "payload": {
+      "power_kw": 999.99,
+      "voltage_v": 480,
+      "current_a": 2083,
+      "timestamp": 1764081937.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T14:45:38.743503",
+    "reason": "negative_power",
+    "power": -50.0,
+    "payload": {
+      "power_kw": -50.0,
+      "voltage_v": 240,
+      "current_a": -208,
+      "timestamp": 1764081938.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T14:45:39.747345",
+    "reason": "all_zero",
+    "payload": {
+      "power_kw": 0,
+      "voltage_v": 0,
+      "current_a": 0,
+      "timestamp": 1764081939.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T15:26:17.617133",
+    "reason": "impossible_power",
+    "power": 999.99,
+    "payload": {
+      "power_kw": 999.99,
+      "voltage_v": 480,
+      "current_a": 2083,
+      "timestamp": 1764084377.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T15:26:18.621038",
+    "reason": "negative_power",
+    "power": -50.0,
+    "payload": {
+      "power_kw": -50.0,
+      "voltage_v": 240,
+      "current_a": -208,
+      "timestamp": 1764084378.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T15:26:19.624952",
+    "reason": "all_zero",
+    "payload": {
+      "power_kw": 0,
+      "voltage_v": 0,
+      "current_a": 0,
+      "timestamp": 1764084379.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T15:26:30.704578",
+    "reason": "impossible_power",
+    "power": 999.99,
+    "payload": {
+      "power_kw": 999.99,
+      "voltage_v": 480,
+      "current_a": 2083,
+      "timestamp": 1764084390.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T15:26:31.708328",
+    "reason": "negative_power",
+    "power": -50.0,
+    "payload": {
+      "power_kw": -50.0,
+      "voltage_v": 240,
+      "current_a": -208,
+      "timestamp": 1764084391.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T15:26:32.712248",
+    "reason": "all_zero",
+    "payload": {
+      "power_kw": 0,
+      "voltage_v": 0,
+      "current_a": 0,
+      "timestamp": 1764084392.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T15:35:26.284062",
+    "reason": "impossible_power",
+    "power": 999.99,
+    "payload": {
+      "power_kw": 999.99,
+      "voltage_v": 480,
+      "current_a": 2083,
+      "timestamp": 1764084926.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T15:35:27.287782",
+    "reason": "negative_power",
+    "power": -50.0,
+    "payload": {
+      "power_kw": -50.0,
+      "voltage_v": 240,
+      "current_a": -208,
+      "timestamp": 1764084927.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T15:35:28.294628",
+    "reason": "all_zero",
+    "payload": {
+      "power_kw": 0,
+      "voltage_v": 0,
+      "current_a": 0,
+      "timestamp": 1764084928.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T15:37:00.330089",
+    "reason": "impossible_power",
+    "power": 999.99,
+    "payload": {
+      "power_kw": 999.99,
+      "voltage_v": 480,
+      "current_a": 2083,
+      "timestamp": 1764085020.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T15:37:01.297935",
+    "reason": "negative_power",
+    "power": -50.0,
+    "payload": {
+      "power_kw": -50.0,
+      "voltage_v": 240,
+      "current_a": -208,
+      "timestamp": 1764085021.5
+    }
+  },
+  {
+    "timestamp": "2025-11-25T15:37:02.301879",
+    "reason": "all_zero",
+    "payload": {
+      "power_kw": 0,
+      "voltage_v": 0,
+      "current_a": 0,
+      "timestamp": 1764085022.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T10:46:23.243094",
+    "reason": "impossible_power",
+    "power": 999.99,
+    "payload": {
+      "power_kw": 999.99,
+      "voltage_v": 480,
+      "current_a": 2083,
+      "timestamp": 1764240383.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T10:46:24.246377",
+    "reason": "negative_power",
+    "power": -50.0,
+    "payload": {
+      "power_kw": -50.0,
+      "voltage_v": 240,
+      "current_a": -208,
+      "timestamp": 1764240384.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T10:46:25.249719",
+    "reason": "all_zero",
+    "payload": {
+      "power_kw": 0,
+      "voltage_v": 0,
+      "current_a": 0,
+      "timestamp": 1764240385.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T10:47:47.585529",
+    "reason": "impossible_power",
+    "power": 999.99,
+    "payload": {
+      "power_kw": 999.99,
+      "voltage_v": 480,
+      "current_a": 2083,
+      "timestamp": 1764240467.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T10:47:48.589105",
+    "reason": "negative_power",
+    "power": -50.0,
+    "payload": {
+      "power_kw": -50.0,
+      "voltage_v": 240,
+      "current_a": -208,
+      "timestamp": 1764240468.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T10:47:49.592798",
+    "reason": "all_zero",
+    "payload": {
+      "power_kw": 0,
+      "voltage_v": 0,
+      "current_a": 0,
+      "timestamp": 1764240469.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T11:21:35.927502",
+    "reason": "impossible_power",
+    "power": 999.99,
+    "payload": {
+      "power_kw": 999.99,
+      "voltage_v": 480,
+      "current_a": 2083,
+      "timestamp": 1764242495.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T11:21:36.930890",
+    "reason": "negative_power",
+    "power": -50.0,
+    "payload": {
+      "power_kw": -50.0,
+      "voltage_v": 240,
+      "current_a": -208,
+      "timestamp": 1764242496.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T11:21:37.934642",
+    "reason": "all_zero",
+    "payload": {
+      "power_kw": 0,
+      "voltage_v": 0,
+      "current_a": 0,
+      "timestamp": 1764242497.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T11:22:39.187974",
+    "reason": "impossible_power",
+    "power": 999.99,
+    "payload": {
+      "power_kw": 999.99,
+      "voltage_v": 480,
+      "current_a": 2083,
+      "timestamp": 1764242559.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T11:22:40.191586",
+    "reason": "negative_power",
+    "power": -50.0,
+    "payload": {
+      "power_kw": -50.0,
+      "voltage_v": 240,
+      "current_a": -208,
+      "timestamp": 1764242560.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T11:22:41.194938",
+    "reason": "all_zero",
+    "payload": {
+      "power_kw": 0,
+      "voltage_v": 0,
+      "current_a": 0,
+      "timestamp": 1764242561.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T14:09:43.074010",
+    "reason": "impossible_power",
+    "power": 999.99,
+    "payload": {
+      "power_kw": 999.99,
+      "voltage_v": 480,
+      "current_a": 2083,
+      "timestamp": 1764252583.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T14:09:44.077692",
+    "reason": "negative_power",
+    "power": -50.0,
+    "payload": {
+      "power_kw": -50.0,
+      "voltage_v": 240,
+      "current_a": -208,
+      "timestamp": 1764252584.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T14:09:45.082056",
+    "reason": "all_zero",
+    "payload": {
+      "power_kw": 0,
+      "voltage_v": 0,
+      "current_a": 0,
+      "timestamp": 1764252585.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T14:11:34.729959",
+    "reason": "impossible_power",
+    "power": 999.99,
+    "payload": {
+      "power_kw": 999.99,
+      "voltage_v": 480,
+      "current_a": 2083,
+      "timestamp": 1764252694.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T14:11:35.733520",
+    "reason": "negative_power",
+    "power": -50.0,
+    "payload": {
+      "power_kw": -50.0,
+      "voltage_v": 240,
+      "current_a": -208,
+      "timestamp": 1764252695.5
+    }
+  },
+  {
+    "timestamp": "2025-11-27T14:11:36.737125",
+    "reason": "all_zero",
+    "payload": {
+      "power_kw": 0,
+      "voltage_v": 0,
+      "current_a": 0,
+      "timestamp": 1764252696.5
+    }
+  }
+]

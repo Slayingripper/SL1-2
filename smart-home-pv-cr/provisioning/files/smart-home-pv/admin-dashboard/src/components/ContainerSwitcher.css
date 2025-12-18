@@ -1,0 +1,9 @@
+.container-switcher{display:flex;align-items:center;gap:8px;margin-left:1rem}
+.container-switcher .switcher-label{font-weight:600;color:#334155}
+.container-switcher select{padding:6px;border-radius:6px;border:1px solid #e2e8f0}
+.conn-info{display:flex;flex-direction:column;background:#fff;padding:8px;border-radius:8px;border:1px solid #e6eef8;margin-left:8px}
+.conn-row{font-size:12px;color:#334155;margin-bottom:4px}
+.conn-actions{display:flex;gap:6px}
+.action-btn{padding:6px 10px;background:#111827;color:#fff;border-radius:6px;border:0;cursor:pointer}
+.action-btn.disabled{opacity:0.5;cursor:not-allowed}
+.gear-btn{padding:4px 8px;border-radius:6px;border:1px solid #e2e8f0;background:#fff;cursor:pointer}

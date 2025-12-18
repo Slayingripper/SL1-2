@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Smart Home PV Walkthrough</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <h2>Walkthrough – Steps to complete the attack scenario</h2>
+  <div id="steps">
+    <div class="step" id="step1"><h3>Step 1 — Reconnaissance</h3>
+      <ol>
+        <li>GET /wifi_scan — find SSID and password</li>
+        <li>Check /logs/recon.pcap to see ARP and HTTP GET</li>
+      </ol>
+      <button onclick="doRecon()">Simulate Recon</button>
+    </div>
+    <div class="step" id="step2"><h3>Step 2 — ARP Spoof / Capture</h3>
+      <ol>
+        <li>POST /do_arp_spoof — simulate ARP spoof</li>
+        <li>GET /attacker/session — read the mqtt session token</li>
+      </ol>
+      <button onclick="doArp()">Simulate ARP Spoof</button>
+    </div>
+    <div class="step" id="step3"><h3>Step 3 — Injection (Modbus)</h3>
+      <ol>
+        <li>Use pymodbus client to write coil 1 (port 15002)</li>
+      </ol>
+      <button onclick="doModbus()">Do Modbus Write</button>
+    </div>
+    <div class="step" id="step4"><h3>Step 4 — IoT Command / MQTT Hijack</h3>
+      <ol>
+        <li>Use /attacker/session to get MQTT token and publish {"command":"HALT","session":"..."} to pv/control</li>
+      </ol>
+      <button onclick="doMQTT()">Simulate MQTT Publish</button>
+    </div>
+    <div class="step" id="step5"><h3>Step 5 — REST Phishing & Credential Theft</h3>
+      <ol>
+        <li>Open /phish_page (phishing site), enter victim credentials to harvest them</li>
+        <li>Use harvested credentials to call /api/login and then /api/hub/command with token</li>
+      </ol>
+      <button onclick="doPhish()">Simulate Phishing</button>
+    </div>
+  </div>
+  <script>
+    async function doRecon(){ await fetch('/wifi_scan'); alert('Recon simulated'); }
+    async function doArp(){ await fetch('/do_arp_spoof',{method:'POST'}); alert('ARP spoof simulated'); }
+    async function doModbus(){ await fetch('/modbus_inject',{method:'POST'}); alert('Modbus inject simulated'); }
+    async function doMQTT(){ const s = await (await fetch('/attacker/session')).json(); fetch('/sim_mqtt',{method:'POST',headers:{'Content-Type':'application/json'}, body: JSON.stringify({session: s.session})}); alert('MQTT publish simulated'); }
+    function doPhish(){ window.open('/phish_page'); }
+  </script>
+</body>
+</html>
+</body>
+</html>

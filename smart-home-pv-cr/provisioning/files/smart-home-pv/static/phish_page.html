@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Simulated Login - PV Admin</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="content">
+    <section class="card" style="max-width:420px;margin:auto;margin-top:2rem;">
+      <h2>PV Admin Login (Simulated - Phishing Page)</h2>
+      <p class="sub">This page captures credentials to simulate a phishing campaign for training only.</p>
+      <form id="phishForm" style="display:flex;flex-direction:column;gap:0.5rem">
+        <label>User: <input id="u" value="admin" class="input"/></label>
+        <label>Password: <input id="p" type="password" class="input"/></label>
+        <div style="display:flex;gap:.5rem"><button type="submit" class="btn">Login</button><button id="cancel" type="button" class="btn">Cancel</button></div>
+      </form>
+      <div id="msg" style="margin-top:0.5rem"></div>
+    </section>
+  </main>
+  <script>
+    const form = document.getElementById('phishForm');
+    form.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const u = document.getElementById('u').value;
+      const p = document.getElementById('p').value;
+      const res = await fetch('/phish', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ username: u, password: p})});
+      const data = await res.json();
+      document.getElementById('msg').textContent = JSON.stringify(data);
+    });
+    document.getElementById('cancel').addEventListener('click', ()=>{ document.getElementById('u').value=''; document.getElementById('p').value=''; });
+  </script>
+</body>
+</html>
