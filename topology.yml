@@ -4,7 +4,7 @@ hosts:
     base_box:
       image: ubuntu-20.04
       mgmt_user: ubuntu
-    flavor: standard.large
+    flavor: standard.medium
 
 routers:
   - name: router
