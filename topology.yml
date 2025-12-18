@@ -2,15 +2,15 @@ name: smart-home-pv-sandbox
 hosts:
   - name: game-server
     base_box:
-      image: ubuntu-20.04
-      mgmt_user: ubuntu
+      image: debian-12-x86_64
+      mgmt_user: debian
     flavor: standard.medium
 
 routers:
   - name: router
     base_box:
-      image: ubuntu-20.04
-      mgmt_user: ubuntu
+      image: debian-12-x86_64
+      mgmt_user: debian
     flavor: standard.small
 
 wan:
