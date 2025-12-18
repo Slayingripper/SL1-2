@@ -1,18 +1,21 @@
-# Smart Home PV Challenge - CyberRangeCZ
+# Smart Home PV Challenge - CyberRangeCZ Training
 
-This repository contains the Sandbox Definition for the Smart Home PV Challenge, adapted for the CyberRangeCZ Platform.
+This repository contains the Training Definition and Sandbox Definition for the Smart Home PV Challenge, adapted for the CyberRangeCZ Platform.
 
 ## Structure
 
+- `training.json`: Defines the training levels, flags, and content.
 - `topology.yml`: Defines the sandbox topology (one game server).
 - `provisioning/playbook.yml`: Ansible playbook to install Docker and deploy the challenge.
 - `provisioning/files/smart-home-pv/`: The challenge source code and Docker Compose configuration.
+- `variables.yml`: APG variables (currently empty).
 
 ## Deployment
 
 1. Push this repository to your CyberRangeCZ Git instance.
-2. Create a new Sandbox Definition in the platform using this repository.
-3. Create a Pool and allocate sandboxes.
+2. Create a new **Training Definition** in the platform using this repository.
+3. Create a **Sandbox Definition** (if needed separately, or the platform might use the same repo for both if configured).
+4. Create a Training Instance and run it.
 
 ## Access
 

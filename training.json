@@ -1,0 +1,84 @@
+{
+  "title": "Smart Home PV - Cyber Range Challenge",
+  "description": "Realistic cyber range requiring professional penetration testing skills. Perform ARP spoofing, network MITM attacks, ICS protocol exploitation (Modbus/MQTT), phishing campaigns, and web application exploitation against a smart home PV controller.",
+  "prerequisites": [],
+  "outcomes": [
+    "Understand IoT and ICS security vulnerabilities",
+    "Exploit industrial protocols (Modbus TCP, MQTT)",
+    "Perform session hijacking and MITM attacks",
+    "Leverage web application vulnerabilities (SQLi, XSS)"
+  ],
+  "state": "UNRELEASED",
+  "levels": [
+    {
+      "title": "Info",
+      "level_type": "INFO_LEVEL",
+      "order": 0,
+      "estimated_duration": 0,
+      "content": "# Smart Home PV Challenge\n\nWelcome to the Smart Home PV Challenge. You will be attacking a simulated Smart Home Photovoltaic (PV) Controller environment.\n\n## Scenario\n\nYou have gained access to a network where a vulnerable PV Controller is running. Your goal is to exploit various vulnerabilities to gain control over the system and disrupt energy production.\n\n## Tools\n\nAn attacker machine (Kali Linux container) is available for you to use. It comes pre-installed with tools like `nmap`, `sqlmap`, `mosquitto-clients`, and custom scripts.\n"
+    },
+    {
+      "title": "Access",
+      "level_type": "ACCESS_LEVEL",
+      "order": 1,
+      "estimated_duration": 0,
+      "passkey": "start",
+      "cloud_content": "Access the **game-server** via SSH or the web console.\n\nTo access the attacker container:\n`ssh -p 2224 attacker@<game-server-ip>`\nPassword: `attacker`\n\nOnce you are ready, submit the flag `start`.",
+      "local_content": "This sandbox has not been tested for use with local sandbox."
+    },
+    {
+      "title": "Reconnaissance",
+      "level_type": "TRAINING_LEVEL",
+      "order": 2,
+      "estimated_duration": 30,
+      "answer": "BSY{PV_RECON_9a7c9f3f9f}",
+      "content": "Find the WiFi credentials used by the smart hub.\n\nHint: Check for any exposed endpoints or logs that might reveal this information.",
+      "solution": "Call `/wifi_scan` to discover credentials or check `/logs/recon.pcap`."
+    },
+    {
+      "title": "Injection via Modbus TCP",
+      "level_type": "TRAINING_LEVEL",
+      "order": 3,
+      "estimated_duration": 30,
+      "answer": "BSY{PV_INJECTION_135b2aee7c}",
+      "content": "Use a Modbus TCP client to write to the inverter coil and stop production.",
+      "solution": "Use `pymodbus` to write coil 1 on port 15002."
+    },
+    {
+      "title": "IoT Command: Halt PV production",
+      "level_type": "TRAINING_LEVEL",
+      "order": 4,
+      "estimated_duration": 30,
+      "answer": "BSY{PV_HALT_4b7d0b6a8c}",
+      "content": "Use MQTT or REST API session to halt the PV system and confirm energy production stopped.",
+      "solution": "Use `/api/login` + `/api/hub/command` endpoints."
+    },
+    {
+      "title": "MQTT Session Hijack",
+      "level_type": "TRAINING_LEVEL",
+      "order": 5,
+      "estimated_duration": 30,
+      "answer": "BSY{PV_MQTT_HIJACK_7c8f1a}",
+      "content": "Intercept the MQTT status message, steal the session token and send a HALT command via MQTT.",
+      "solution": "Perform ARP spoof, subscribe to `pv/status`, extract token, publish HALT to `pv/control`."
+    },
+    {
+      "title": "REST API Session Hijack",
+      "level_type": "TRAINING_LEVEL",
+      "order": 6,
+      "estimated_duration": 30,
+      "answer": "BSY{PV_REST_HIJACK_22cd3b9d}",
+      "content": "Find credentials (via phishing) and use them to login and call the hub REST API to halt the PV.",
+      "solution": "Simulate phishing, retrieve creds, login via `/api/login`, POST to `/api/hub/command`."
+    },
+    {
+      "title": "Vulnerable Admin Panel",
+      "level_type": "TRAINING_LEVEL",
+      "order": 7,
+      "estimated_duration": 30,
+      "answer": "BSY{PV_DASH_7e3a56}",
+      "content": "The admin dashboard is intentionally vulnerable to SQL injection and stored XSS. Use real tools to exploit it.",
+      "solution": "Use `sqlmap` against `/api/admin/login` or inject XSS in `/api/admin/devices`."
+    }
+  ]
+}
