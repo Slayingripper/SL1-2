@@ -1,2 +1,29 @@
 # Variables for APG (Adaptive Problem Generation)
-# Currently empty as this is a static challenge
+
+flag_recon:
+  type: password
+  length: 24
+
+flag_injection:
+  type: password
+  length: 24
+
+flag_halt:
+  type: password
+  length: 24
+
+flag_mqtt:
+  type: password
+  length: 24
+
+flag_rest:
+  type: password
+  length: 24
+
+flag_dash:
+  type: password
+  length: 24
+
+admin_password:
+  type: password
+  length: 16
