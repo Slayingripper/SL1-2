@@ -10,14 +10,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+RUN mkdir -p /opt/pv-controller/logs
+
+RUN pip install --no-cache-dir flask flask-cors paho-mqtt pymodbus
+
 COPY server.py $APP_DIR/
 COPY server_cyber_range.py $APP_DIR/
 COPY static/ $APP_DIR/static/
 COPY scripts/ $APP_DIR/scripts/
 COPY admin-dashboard/dist/ $APP_DIR/admin-dashboard/dist/
-RUN mkdir -p /opt/pv-controller/logs
-
-RUN pip install --no-cache-dir flask flask-cors paho-mqtt pymodbus
 
 EXPOSE 80 15002
 

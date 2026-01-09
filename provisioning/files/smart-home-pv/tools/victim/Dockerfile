@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /home/victim
-COPY victim_runner.js ./
 RUN npm init -y && npm install puppeteer node-fetch@2 --no-audit --no-fund
+COPY victim_runner.js ./
 
 CMD ["node","victim_runner.js"]
