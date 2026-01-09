@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 ARG APP_DIR=/opt/pv-controller
 WORKDIR $APP_DIR
