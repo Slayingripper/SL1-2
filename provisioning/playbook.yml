@@ -40,6 +40,11 @@
         path: /tmp/smart-home-pv.tar.gz
         state: absent
 
+    - name: Create docker network
+      shell: docker network create --subnet=172.20.0.0/24 playground-net
+      register: network_create
+      failed_when: network_create.rc != 0 and "already exists" not in network_create.stderr
+
     - name: Build and start containers
       shell: docker-compose up -d --build
       args:
