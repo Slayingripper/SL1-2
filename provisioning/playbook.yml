@@ -5,11 +5,12 @@
       apt:
         update_cache: yes
 
-    - name: Install Docker and Docker Compose
+    - name: Install Docker, Docker Compose and rsync
       apt:
         name:
           - docker.io
           - docker-compose
+          - rsync
         state: present
 
     - name: Ensure Docker service is running
@@ -19,10 +20,20 @@
         enabled: yes
 
     - name: Copy challenge files
-      copy:
+      synchronize:
         src: files/smart-home-pv
         dest: /opt/
+        rsync_opts:
+          - "--exclude=node_modules"
+          - "--exclude=__pycache__"
+          - "--exclude=.git"
+        rsync_path: "sudo rsync"
+
+    - name: Set permissions
+      file:
+        path: /opt/smart-home-pv
         mode: '0755'
+        recurse: yes
 
     - name: Build and start containers
       shell: docker-compose up -d --build
