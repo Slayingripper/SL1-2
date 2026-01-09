@@ -45,8 +45,38 @@
       register: network_create
       failed_when: network_create.rc != 0 and "already exists" not in network_create.stderr
 
-    - name: Build and start containers
-      shell: docker-compose up -d --build
+    - name: Build pv-controller image
+      shell: docker build --network=host -t scl-challenge-smart-home-pv .
+      args:
+        chdir: /opt/smart-home-pv
+
+    - name: Build attacker image
+      shell: docker build --network=host -t scl-challenge-smart-home-pv-attacker tools/attacker
+      args:
+        chdir: /opt/smart-home-pv
+
+    - name: Build noise image
+      shell: docker build --network=host -t scl-challenge-smart-home-pv-noise tools/noise
+      args:
+        chdir: /opt/smart-home-pv
+
+    - name: Build victim image
+      shell: docker build --network=host -t scl-challenge-smart-home-pv-victim tools/victim
+      args:
+        chdir: /opt/smart-home-pv
+
+    - name: Build telemetry-seeder image
+      shell: docker build --network=host -t scl-challenge-smart-home-pv-seeder tools/noise
+      args:
+        chdir: /opt/smart-home-pv
+
+    - name: Build replayer image
+      shell: docker build --network=host -t scl-challenge-smart-home-pv-replayer tools/replayer
+      args:
+        chdir: /opt/smart-home-pv
+
+    - name: Start containers
+      shell: docker-compose up -d
       args:
         chdir: /opt/smart-home-pv
 
