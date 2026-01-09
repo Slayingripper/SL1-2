@@ -5,12 +5,11 @@
       apt:
         update_cache: yes
 
-    - name: Install Docker, Docker Compose and rsync
+    - name: Install Docker and Docker Compose
       apt:
         name:
           - docker.io
           - docker-compose
-          - rsync
         state: present
 
     - name: Ensure Docker service is running
@@ -19,21 +18,27 @@
         state: started
         enabled: yes
 
-    - name: Copy challenge files
-      synchronize:
-        src: files/smart-home-pv
-        dest: /opt/
-        rsync_opts:
-          - "--exclude=node_modules"
-          - "--exclude=__pycache__"
-          - "--exclude=.git"
-        rsync_path: "sudo rsync"
+    - name: Create local archive of challenge files
+      delegate_to: localhost
+      command: >
+        tar -czf /tmp/smart-home-pv.tar.gz
+        --exclude='node_modules'
+        --exclude='__pycache__'
+        --exclude='.git'
+        -C "{{ playbook_dir }}/files"
+        smart-home-pv
 
-    - name: Set permissions
-      file:
-        path: /opt/smart-home-pv
+    - name: Copy and extract challenge files
+      unarchive:
+        src: /tmp/smart-home-pv.tar.gz
+        dest: /opt/
         mode: '0755'
-        recurse: yes
+
+    - name: Remove local archive
+      delegate_to: localhost
+      file:
+        path: /tmp/smart-home-pv.tar.gz
+        state: absent
 
     - name: Build and start containers
       shell: docker-compose up -d --build
