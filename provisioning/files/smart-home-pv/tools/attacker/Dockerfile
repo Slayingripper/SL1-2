@@ -67,6 +67,9 @@ RUN sed -i '/^ChallengeResponseAuthentication/d' /etc/ssh/sshd_config && \
     sed -i '/^PasswordAuthentication/d' /etc/ssh/sshd_config && \
     sed -i '/^#PasswordAuthentication/d' /etc/ssh/sshd_config
 
+# Fix PAM for Docker (prevents "tunnel closed" due to pam_loginuid failure)
+RUN sed -i 's/session\s*required\s*pam_loginuid.so/session optional pam_loginuid.so/g' /etc/pam.d/sshd || true
+
 # Ensure Correct Permissions
 RUN mkdir -p /home/attacker/.ssh && \
     chown attacker:attacker /home/attacker/.ssh && \
