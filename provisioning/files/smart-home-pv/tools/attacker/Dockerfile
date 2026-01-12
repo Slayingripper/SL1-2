@@ -23,6 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   less \
   jq \
   sudo \
+  xauth \
   openssh-server \
   && rm -rf /var/lib/apt/lists/*
 
@@ -57,10 +58,12 @@ RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 # Setup SSH and User Access (mimicking cyberrangecz/ansible-role-user-access)
 RUN mkdir -p /var/run/sshd && echo 'attacker:attacker' | chpasswd
 
-# Configure SSH authentication
+# Configure SSH authentication and X11 Forwarding
 RUN mkdir -p /etc/ssh/sshd_config.d && \
     echo 'ChallengeResponseAuthentication yes' > /etc/ssh/sshd_config.d/99-challenge-password-auth.conf && \
-    echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config.d/99-challenge-password-auth.conf
+    echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config.d/99-challenge-password-auth.conf && \
+    echo 'X11Forwarding yes' > /etc/ssh/sshd_config.d/99-x11-forwarding.conf && \
+    echo 'X11UseLocalhost no' >> /etc/ssh/sshd_config.d/99-x11-forwarding.conf
 
 # Clean up main sshd_config to avoid conflicts
 RUN sed -i '/^ChallengeResponseAuthentication/d' /etc/ssh/sshd_config && \
