@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   vim \
   less \
   jq \
+  sudo \
   openssh-server \
   && rm -rf /var/lib/apt/lists/*
 
@@ -53,10 +54,27 @@ RUN chmod 1777 /tmp
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Setup SSH
-RUN mkdir -p /var/run/sshd && echo 'attacker:attacker' | chpasswd || true
-RUN sed -i 's/^#PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config || true
-RUN sed -i 's/^PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config || true
+# Setup SSH and User Access (mimicking cyberrangecz/ansible-role-user-access)
+RUN mkdir -p /var/run/sshd && echo 'attacker:attacker' | chpasswd
+
+# Configure SSH authentication
+RUN mkdir -p /etc/ssh/sshd_config.d && \
+    echo 'ChallengeResponseAuthentication yes' > /etc/ssh/sshd_config.d/99-challenge-password-auth.conf && \
+    echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config.d/99-challenge-password-auth.conf
+
+# Clean up main sshd_config to avoid conflicts
+RUN sed -i '/^ChallengeResponseAuthentication/d' /etc/ssh/sshd_config && \
+    sed -i '/^PasswordAuthentication/d' /etc/ssh/sshd_config && \
+    sed -i '/^#PasswordAuthentication/d' /etc/ssh/sshd_config
+
+# Ensure Correct Permissions
+RUN mkdir -p /home/attacker/.ssh && \
+    chown attacker:attacker /home/attacker/.ssh && \
+    chmod 700 /home/attacker/.ssh
+
+# Configure passwordless sudo for attacker
+RUN echo 'attacker ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+
 EXPOSE 22
 
 # Default command: run entrypoint then sshd
