@@ -52,7 +52,7 @@ RUN chmod 1777 /tmp
 
 # Copy entrypoint script
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 # Setup SSH and User Access (mimicking cyberrangecz/ansible-role-user-access)
 RUN mkdir -p /var/run/sshd && echo 'attacker:attacker' | chpasswd
