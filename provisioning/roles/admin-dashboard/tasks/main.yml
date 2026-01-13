@@ -1,0 +1,129 @@
+---
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Install Node.js and npm
+  apt:
+    name:
+      - nodejs
+      - npm
+      - curl
+      - git
+      - nginx
+    state: present
+
+- name: Install build dependencies for Node.js
+  apt:
+    name:
+      - build-essential
+    state: present
+
+- name: Create admin dashboard directory
+  file:
+    path: /opt/admin-dashboard
+    state: directory
+    mode: '0755'
+
+- name: Copy admin dashboard source files
+  copy:
+    src: "{{ playbook_dir }}/files/smart-home-pv/admin-dashboard/"
+    dest: /opt/admin-dashboard/
+    mode: '0755'
+
+- name: Install npm dependencies
+  npm:
+    path: /opt/admin-dashboard
+    state: present
+
+- name: Build admin dashboard
+  shell: npm run build
+  args:
+    chdir: /opt/admin-dashboard
+  environment:
+    NODE_ENV: production
+
+- name: Configure environment for dashboard
+  copy:
+    dest: /opt/admin-dashboard/.env
+    content: |
+      VITE_PV_CONTROLLER_URL=http://10.10.10.10
+      VITE_MQTT_BROKER_URL=ws://10.10.10.10:9001
+
+- name: Rebuild with production settings
+  shell: npm run build
+  args:
+    chdir: /opt/admin-dashboard
+  environment:
+    NODE_ENV: production
+
+- name: Configure Nginx for admin dashboard
+  copy:
+    dest: /etc/nginx/sites-available/admin-dashboard
+    content: |
+      server {
+          listen 80 default_server;
+          listen [::]:80 default_server;
+          
+          root /opt/admin-dashboard/dist;
+          index index.html;
+          
+          server_name _;
+          
+          location / {
+              try_files $uri $uri/ /index.html;
+          }
+          
+          location /api {
+              proxy_pass http://10.10.10.10;
+              proxy_http_version 1.1;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection 'upgrade';
+              proxy_set_header Host $host;
+              proxy_cache_bypass $http_upgrade;
+          }
+      }
+
+- name: Remove default Nginx site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+
+- name: Enable admin dashboard site
+  file:
+    src: /etc/nginx/sites-available/admin-dashboard
+    dest: /etc/nginx/sites-enabled/admin-dashboard
+    state: link
+  notify: restart nginx
+
+- name: Enable and start Nginx
+  service:
+    name: nginx
+    state: started
+    enabled: yes
+
+- name: Add MOTD for admin dashboard
+  copy:
+    dest: /etc/motd
+    content: |
+      ================================
+      ADMIN DASHBOARD SERVER
+      ================================
+      
+      You are on the Admin Dashboard VM.
+      This server hosts the React-based monitoring dashboard.
+      
+      Dashboard URL: http://10.10.10.30
+      
+      The dashboard connects to:
+      - PV Controller API: http://10.10.10.10
+      - MQTT Broker: ws://10.10.10.10:9001
+      
+      Service management:
+      - systemctl status nginx
+      
+      Dashboard files: /opt/admin-dashboard/
+      Built files: /opt/admin-dashboard/dist/
+      
+      Access this from your browser to monitor the PV system!
+      ================================

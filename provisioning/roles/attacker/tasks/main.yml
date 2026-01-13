@@ -1,0 +1,95 @@
+---
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Install attacker tools
+  apt:
+    name:
+      - nmap
+      - hydra
+      - nikto
+      - netcat-traditional
+      - tcpdump
+      - python3
+      - python3-pip
+      - openssh-server
+      - net-tools
+      - dsniff
+      - ettercap-text-only
+      - arpspoof
+    state: present
+
+- name: Install Python packages for attacker tools
+  pip:
+    name:
+      - pymodbus
+      - scapy
+      - requests
+    executable: pip3
+
+- name: Create attacker user
+  user:
+    name: attacker
+    password: "{{ 'attacker' | password_hash('sha512') }}"
+    shell: /bin/bash
+    groups: sudo
+    append: yes
+
+- name: Copy attacker tools
+  copy:
+    src: "{{ playbook_dir }}/files/smart-home-pv/tools/attacker/"
+    dest: /home/attacker/tools/
+    owner: attacker
+    group: attacker
+    mode: '0755'
+
+- name: Copy scan results for reference
+  copy:
+    src: "{{ playbook_dir }}/files/smart-home-pv/tools/attacker/{{ item }}"
+    dest: /home/attacker/tools/
+    owner: attacker
+    group: attacker
+    mode: '0644'
+  loop:
+    - scan_full.txt
+    - scan_modbus.txt
+    - scan_mqtt.txt
+    - scan_pv_controller.txt
+  ignore_errors: yes
+
+- name: Enable SSH service
+  service:
+    name: ssh
+    state: started
+    enabled: yes
+
+- name: Configure SSH to allow password authentication
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PasswordAuthentication'
+    line: 'PasswordAuthentication yes'
+    state: present
+  notify: restart ssh
+
+- name: Add MOTD for attacker
+  copy:
+    dest: /etc/motd
+    content: |
+      ================================
+      ATTACKER MACHINE
+      ================================
+      
+      You are on the attacker VM. Use this machine to perform reconnaissance
+      and attack simulations against the Blue Team infrastructure.
+      
+      Target IPs:
+      - Blue Team (PV Controller): 10.10.10.10
+      - Admin Dashboard: 10.10.10.30
+      
+      Available tools in ~/tools/
+      - attacker_modbus.py: Modbus attack scripts
+      - demo_attacks.sh: Automated attack demos
+      
+      Good luck!
+      ================================

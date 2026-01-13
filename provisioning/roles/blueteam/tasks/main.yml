@@ -1,0 +1,182 @@
+---
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Install system dependencies
+  apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - mosquitto
+      - mosquitto-clients
+      - tcpdump
+      - tshark
+      - net-tools
+      - iptables
+      - curl
+      - wget
+    state: present
+
+- name: Install Python dependencies for PV controller
+  pip:
+    requirements: /tmp/requirements.txt
+    executable: pip3
+  vars:
+    requirements_content: |
+      flask==3.0.0
+      flask-cors==4.0.0
+      paho-mqtt==1.6.1
+      pymodbus==3.5.4
+      scapy==2.5.0
+
+- name: Create requirements file
+  copy:
+    content: |
+      flask==3.0.0
+      flask-cors==4.0.0
+      paho-mqtt==1.6.1
+      pymodbus==3.5.4
+      scapy==2.5.0
+    dest: /tmp/requirements.txt
+
+- name: Install Python dependencies
+  pip:
+    requirements: /tmp/requirements.txt
+    executable: pip3
+
+- name: Create application directory
+  file:
+    path: /opt/pv-controller
+    state: directory
+    mode: '0755'
+
+- name: Copy PV controller application files
+  copy:
+    src: "{{ playbook_dir }}/files/smart-home-pv/"
+    dest: /opt/pv-controller/
+    mode: '0755'
+
+- name: Create logs directory
+  file:
+    path: /opt/pv-controller/logs
+    state: directory
+    mode: '0755'
+
+- name: Configure Mosquitto MQTT broker
+  copy:
+    src: "{{ playbook_dir }}/files/smart-home-pv/mosquitto-config/mosquitto.conf"
+    dest: /etc/mosquitto/mosquitto.conf
+    mode: '0644'
+  notify: restart mosquitto
+
+- name: Enable and start Mosquitto
+  service:
+    name: mosquitto
+    state: started
+    enabled: yes
+
+- name: Create systemd service for PV controller
+  copy:
+    dest: /etc/systemd/system/pv-controller.service
+    content: |
+      [Unit]
+      Description=Smart Home PV Controller
+      After=network.target mosquitto.service
+      Requires=mosquitto.service
+
+      [Service]
+      Type=simple
+      User=root
+      WorkingDirectory=/opt/pv-controller
+      Environment="MQTT_HOST=localhost"
+      Environment="MODBUS_PORT=15002"
+      Environment="BLOCK_TTL_SECONDS=60"
+      ExecStart=/usr/bin/python3 /opt/pv-controller/server_cyber_range.py
+      Restart=on-failure
+      RestartSec=10
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Create systemd service for victim simulator
+  copy:
+    dest: /etc/systemd/system/victim-simulator.service
+    content: |
+      [Unit]
+      Description=Victim Simulator for Smart Home PV
+      After=network.target pv-controller.service
+      Requires=pv-controller.service
+
+      [Service]
+      Type=simple
+      User=root
+      WorkingDirectory=/opt/pv-controller/tools/victim
+      Environment="PV_URL=http://localhost/admin"
+      Environment="PV_HOST=localhost"
+      Environment="PV_BASE_URL=http://localhost"
+      ExecStart=/usr/bin/node /opt/pv-controller/tools/victim/victim_runner.js
+      Restart=on-failure
+      RestartSec=10
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Install Node.js for victim simulator
+  apt:
+    name:
+      - nodejs
+      - npm
+    state: present
+
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: yes
+
+- name: Enable and start PV controller service
+  service:
+    name: pv-controller
+    state: started
+    enabled: yes
+
+- name: Enable and start victim simulator
+  service:
+    name: victim-simulator
+    state: started
+    enabled: yes
+
+- name: Configure firewall to allow services
+  shell: |
+    iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+    iptables -A INPUT -p tcp --dport 15002 -j ACCEPT
+    iptables -A INPUT -p tcp --dport 1883 -j ACCEPT
+    iptables -A INPUT -p tcp --dport 9001 -j ACCEPT
+    iptables-save > /etc/iptables/rules.v4
+  ignore_errors: yes
+
+- name: Add MOTD for blue team
+  copy:
+    dest: /etc/motd
+    content: |
+      ================================
+      BLUE TEAM - PV CONTROLLER
+      ================================
+      
+      You are on the Blue Team infrastructure VM.
+      This server hosts the Smart Home PV Controller system.
+      
+      Services running:
+      - PV Controller Web Interface: http://10.10.10.10:80
+      - Modbus TCP Server: Port 15002
+      - MQTT Broker: Port 1883 (internal), 9001 (websocket)
+      
+      Service management:
+      - systemctl status pv-controller
+      - systemctl status mosquitto
+      - systemctl status victim-simulator
+      
+      Logs location: /opt/pv-controller/logs/
+      
+      Monitor for attacks and protect the infrastructure!
+      ================================

@@ -1,9 +1,21 @@
 name: smart-home-pv-sandbox
 hosts:
-  - name: game-server
+  - name: blueteam
     base_box:
       image: debian-12-x86_64
       mgmt_user: debian
+    flavor: standard.small
+  
+  - name: attacker
+    base_box:
+      image: debian-12-x86_64
+      mgmt_user: debian
+    flavor: standard.small
+  
+  - name: admin-dashboard
+    base_box:
+      image: ubuntu-noble-x86_64
+      mgmt_user: ubuntu
     flavor: standard.small
 
 routers:
@@ -22,9 +34,17 @@ networks:
     cidr: 10.10.10.0/24
 
 net_mappings:
-  - host: game-server
+  - host: blueteam
     network: game-net
-    ip: 10.10.10.5
+    ip: 10.10.10.10
+  
+  - host: attacker
+    network: game-net
+    ip: 10.10.10.20
+  
+  - host: admin-dashboard
+    network: game-net
+    ip: 10.10.10.30
 
 router_mappings:
   - router: router
@@ -34,4 +54,6 @@ router_mappings:
 groups:
   - name: game-nodes
     nodes:
-      - game-server
+      - blueteam
+      - attacker
+      - admin-dashboard

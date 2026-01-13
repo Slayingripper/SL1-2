@@ -1,96 +1,18 @@
-- hosts: game-server
+---
+# Blue Team VM - Hosts PV Controller and victim simulator
+- hosts: blueteam
   become: yes
-  tasks:
-    - name: Update apt cache
-      apt:
-        update_cache: yes
+  roles:
+    - blueteam
 
-    - name: Install Docker and Docker Compose
-      apt:
-        name:
-          - docker.io
-          - docker-compose
-        state: present
+# Attacker VM - Penetration testing tools and attack scripts
+- hosts: attacker
+  become: yes
+  roles:
+    - attacker
 
-    - name: Ensure Docker service is running
-      service:
-        name: docker
-        state: started
-        enabled: yes
-
-    - name: Create local archive of challenge files
-      delegate_to: localhost
-      command: >
-        tar -czf /tmp/smart-home-pv.tar.gz
-        --exclude='node_modules'
-        --exclude='__pycache__'
-        --exclude='.git'
-        -C "{{ playbook_dir }}/files"
-        smart-home-pv
-
-    - name: Copy and extract challenge files
-      unarchive:
-        src: /tmp/smart-home-pv.tar.gz
-        dest: /opt/
-        mode: '0755'
-
-    - name: Remove local archive
-      delegate_to: localhost
-      file:
-        path: /tmp/smart-home-pv.tar.gz
-        state: absent
-
-    - name: Create docker network
-      shell: docker network create --subnet=172.20.0.0/24 playground-net
-      register: network_create
-      failed_when: network_create.rc != 0 and "already exists" not in network_create.stderr
-
-    - name: Build pv-controller image
-      shell: docker build --network=host -t scl-challenge-smart-home-pv .
-      args:
-        chdir: /opt/smart-home-pv
-
-    - name: Build attacker image
-      shell: docker build --network=host -t scl-challenge-smart-home-pv-attacker tools/attacker
-      args:
-        chdir: /opt/smart-home-pv
-
-    - name: Build noise image
-      shell: docker build --network=host -t scl-challenge-smart-home-pv-noise tools/noise
-      args:
-        chdir: /opt/smart-home-pv
-
-    - name: Build victim image
-      shell: docker build --network=host -t scl-challenge-smart-home-pv-victim tools/victim
-      args:
-        chdir: /opt/smart-home-pv
-
-    - name: Build telemetry-seeder image
-      shell: docker build --network=host -t scl-challenge-smart-home-pv-seeder tools/noise
-      args:
-        chdir: /opt/smart-home-pv
-
-    - name: Build replayer image
-      shell: docker build --network=host -t scl-challenge-smart-home-pv-replayer tools/replayer
-      args:
-        chdir: /opt/smart-home-pv
-
-    - name: Start containers
-      shell: docker-compose up -d
-      args:
-        chdir: /opt/smart-home-pv
-
-    - name: Add message to MOTD
-      copy:
-        dest: /etc/motd
-        content: |
-          Welcome to the Smart Home PV Challenge!
-          
-          The challenge environment is running in Docker containers.
-          To access the attacker machine, SSH to port 2224:
-          ssh -p 2224 attacker@localhost
-          Password: attacker
-          
-          The PV Controller Dashboard is at http://localhost:8081
-          
-          Good luck!
+# Admin Dashboard VM - React-based monitoring interface
+- hosts: admin-dashboard
+  become: yes
+  roles:
+    - admin-dashboard

@@ -1,2 +1,13 @@
-collections:
-  - name: community.docker
+---
+# Ansible Galaxy requirements for VM-based provisioning
+# Note: Docker collection no longer required as services run natively
+
+collections: []
+
+# No external collections required - using built-in Ansible modules:
+# - apt (package management)
+# - systemd (service management)
+# - copy/template (file management)
+# - user (user management)
+# - pip (Python package management)
+# - npm (Node.js package management)
