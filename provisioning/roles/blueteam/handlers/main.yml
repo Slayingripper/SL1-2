@@ -1,6 +1,5 @@
 ---
-handlers:
-  - name: restart mosquitto
-    service:
-      name: mosquitto
-      state: restarted
+- name: restart mosquitto
+  service:
+    name: mosquitto
+    state: restarted
