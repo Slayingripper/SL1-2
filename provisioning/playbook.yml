@@ -88,8 +88,8 @@
           
           The challenge environment is running in Docker containers.
           To access the attacker machine, SSH to port 2224:
-          ssh -p 2224 attacker@localhost
-          Password: attacker
+          ssh -p 2224 {{ attacker_container_username }}@localhost
+          Password: {{ attacker_container_password }}
           
           The PV Controller Dashboard is at http://localhost:8081
           

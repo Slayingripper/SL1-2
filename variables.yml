@@ -27,3 +27,22 @@ flag_dash:
 admin_password:
   type: password
   length: 16
+
+# Fixed credentials for VMs and containers
+vm_username:
+  value: "test"
+
+vm_password:
+  value: "password"
+
+attacker_container_username:
+  value: "test"
+
+attacker_container_password:
+  value: "password"
+
+router_username:
+  value: "test"
+
+router_password:
+  value: "password"

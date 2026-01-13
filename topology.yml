@@ -3,14 +3,16 @@ hosts:
   - name: game-server
     base_box:
       image: debian-12-x86_64
-      mgmt_user: debian
+      mgmt_user: "{{ vm_username }}"
+      mgmt_pass: "{{ vm_password }}"
     flavor: standard.small
 
 routers:
   - name: router
     base_box:
       image: debian-12-x86_64
-      mgmt_user: debian
+      mgmt_user: "{{ router_username }}"
+      mgmt_pass: "{{ router_password }}"
     flavor: standard.small
 
 wan:
