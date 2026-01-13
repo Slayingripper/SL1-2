@@ -19,17 +19,10 @@
       - wget
     state: present
 
-- name: Install Python dependencies for PV controller
-  pip:
-    requirements: /tmp/requirements.txt
-    executable: pip3
-  vars:
-    requirements_content: |
-      flask==3.0.0
-      flask-cors==4.0.0
-      paho-mqtt==1.6.1
-      pymodbus==3.5.4
-      scapy==2.5.0
+- name: Create virtual environment for PV controller
+  command: python3 -m venv /opt/pv-controller-venv
+  args:
+    creates: /opt/pv-controller-venv/bin/python
 
 - name: Create requirements file
   copy:
@@ -41,10 +34,11 @@
       scapy==2.5.0
     dest: /tmp/requirements.txt
 
-- name: Install Python dependencies
+- name: Install Python dependencies in virtual environment
   pip:
     requirements: /tmp/requirements.txt
-    executable: pip3
+    virtualenv: /opt/pv-controller-venv
+    virtualenv_command: python3 -m venv
 
 - name: Create application directory
   file:
@@ -93,7 +87,7 @@
       Environment="MQTT_HOST=localhost"
       Environment="MODBUS_PORT=15002"
       Environment="BLOCK_TTL_SECONDS=60"
-      ExecStart=/usr/bin/python3 /opt/pv-controller/server_cyber_range.py
+      ExecStart=/opt/pv-controller-venv/bin/python /opt/pv-controller/server_cyber_range.py
       Restart=on-failure
       RestartSec=10
 
