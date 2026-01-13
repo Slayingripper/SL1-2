@@ -27,3 +27,16 @@ flag_dash:
 admin_password:
   type: password
   length: 16
+
+# SSH Credentials for VMs
+blueteam_password:
+  value: "cyberrange123"
+
+attacker_password:
+  value: "cyberrange123"
+
+admin_dashboard_password:
+  value: "cyberrange123"
+
+router_password:
+  value: "cyberrange123"

@@ -4,18 +4,21 @@ hosts:
     base_box:
       image: debian-12-x86_64
       mgmt_user: debian
+      mgmt_pass: "{{ blueteam_password }}"
     flavor: standard.small
   
   - name: attacker
     base_box:
       image: debian-12-x86_64
       mgmt_user: debian
+      mgmt_pass: "{{ attacker_password }}"
     flavor: standard.small
   
   - name: admin-dashboard
     base_box:
       image: ubuntu-noble-x86_64
       mgmt_user: ubuntu
+      mgmt_pass: "{{ admin_dashboard_password }}"
     flavor: standard.small
 
 routers:
@@ -23,6 +26,7 @@ routers:
     base_box:
       image: debian-12-x86_64
       mgmt_user: debian
+      mgmt_pass: "{{ router_password }}"
     flavor: standard.small
 
 wan:
