@@ -1,3 +1,35 @@
+- hosts: "all:!localhost"
+  become: yes
+  tasks:
+    - name: Ensure test user exists
+      user:
+        name: test
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Set test user password
+      shell: echo 'test:password' | chpasswd
+
+    - name: Configure passwordless sudo for test user
+      copy:
+        dest: /etc/sudoers.d/90-test-nopasswd
+        mode: '0440'
+        content: |
+          test ALL=(ALL) NOPASSWD: ALL
+
+    - name: Enable SSH password authentication
+      copy:
+        dest: /etc/ssh/sshd_config.d/99-cyberrange-password-auth.conf
+        mode: '0644'
+        content: |
+          PasswordAuthentication yes
+          KbdInteractiveAuthentication yes
+
+    - name: Restart SSH
+      service:
+        name: ssh
+        state: restarted
+
 - hosts: game-server
   become: yes
   tasks:
