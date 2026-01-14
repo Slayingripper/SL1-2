@@ -49,7 +49,7 @@ services:
       playground-net:
         ipv4_address: 172.20.0.70
     ports:
-      - "22:22"  # SSH access to attacker container
+      - "2224:22"  # SSH access to attacker container (host port 22 is reserved for game-server SSH)
     cap_add:
       - NET_RAW
       - NET_ADMIN

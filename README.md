@@ -8,7 +8,7 @@ This repository contains the Training Definition and Sandbox Definition for the 
 - `topology.yml`: Defines the sandbox topology (one game server).
 - `provisioning/playbook.yml`: Ansible playbook to install Docker and deploy the challenge.
 - `provisioning/files/smart-home-pv/`: The challenge source code and Docker Compose configuration.
-- `variables.yml`: APG variables (currently empty).
+- `variables.yml`: APG variables.
 
 ## Deployment
 
@@ -26,9 +26,9 @@ The environment is containerized using Docker Compose.
 To access the attacker machine (Kali Linux container), SSH into the `game-server` on port **2224**.
 
 ```bash
-ssh -p 2224 attacker@<game-server-ip>
+ssh -p 2224 test@<game-server-ip>
 ```
-Password: `attacker`
+Password: `password`
 
 ### PV Controller Dashboard
 The dashboard is available at `http://<game-server-ip>:8081`.

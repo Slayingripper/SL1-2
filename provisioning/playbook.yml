@@ -88,7 +88,7 @@
           
           The challenge environment is running in Docker containers.
           To access the attacker machine:
-          ssh test@localhost
+          ssh -p 2224 test@localhost
           Password: password
           
           The PV Controller Dashboard is at http://localhost:8081
