@@ -4,7 +4,6 @@ hosts:
     base_box:
       image: debian-12-x86_64
       mgmt_user: test
-      mgmt_pass: password
     flavor: standard.small
 
 routers:
@@ -12,7 +11,6 @@ routers:
     base_box:
       image: debian-12-x86_64
       mgmt_user: test
-      mgmt_pass: password
     flavor: standard.small
 
 wan:
