@@ -4,7 +4,7 @@ hosts:
     base_box:
       image: debian-12-x86_64
       mgmt_user: debian
-      mgmt_pass: "{{ green_team_password.value | default(green_team_password) }}"
+      mgmt_protocol: ssh
     flavor: standard.small
 
   - name: attacker
@@ -13,14 +13,14 @@ hosts:
       # Example (if supported): kali-2024-x86_64
       image: "{{ attacker_base_image }}"
       mgmt_user: attacker
-      mgmt_pass: "{{ attacker_password.value | default(attacker_password) }}"
+      mgmt_protocol: ssh
     flavor: standard.small
 
   - name: blue-team
     base_box:
       image: debian-12-x86_64
       mgmt_user: debian
-      mgmt_pass: "{{ blue_team_password.value | default(blue_team_password) }}"
+      mgmt_protocol: ssh
     flavor: standard.small
 
 routers:
@@ -28,7 +28,7 @@ routers:
     base_box:
       image: debian-12-x86_64
       mgmt_user: debian
-      mgmt_pass: "{{ router_password.value | default(router_password) }}"
+      mgmt_protocol: ssh
     flavor: standard.small
 
 wan:

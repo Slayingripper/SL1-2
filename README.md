@@ -54,8 +54,8 @@ Game Network (10.10.10.0/24)
 
 ## Access
 
-CyberRangeCZ management access (web console / SSH) uses the credentials from `topology.yml` (backed by `variables.yml`).
-This repository's provisioning enforces those passwords on the VMs (default password value is `cyberrange123`).
+CyberRangeCZ management access (web console / SSH) uses the VM management user from `topology.yml`.
+This repository's provisioning enforces the intended passwords on the VMs based on `variables.yml` (defaults: `cyberrange123` for Debian VMs, `attacker` for the attacker VM).
 
 ### Attacker Machine
 SSH into the attacker VM:
