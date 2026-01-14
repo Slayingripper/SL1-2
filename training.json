@@ -23,7 +23,7 @@
       "order": 1,
       "estimated_duration": 0,
       "passkey": "start",
-      "cloud_content": "Access the **game-server** via SSH or the web console.\n\nTo access the attacker container:\n`ssh -p 2224 attacker@<game-server-ip>`\nPassword: `attacker`\n\nOnce you are ready, submit the flag `start`.",
+      "cloud_content": "Access the **game-server** via SSH or the web console.\n\nTo access the attacker container:\n`ssh test@<game-server-ip>`\nPassword: `password`\n\nOnce you are ready, submit the flag `start`.",
       "local_content": "This sandbox has not been tested for use with local sandbox."
     },
     {

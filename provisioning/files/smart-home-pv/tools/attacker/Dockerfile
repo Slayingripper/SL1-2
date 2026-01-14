@@ -43,10 +43,7 @@ RUN if ! command -v sqlmap >/dev/null 2>&1; then \
   fi
 
 # Run as root for network attacks (tcpdump, arpspoof require CAP_NET_RAW)
-# Create attacker user but stay root
-RUN useradd -m -s /bin/bash attacker || true
-RUN mkdir -p /home/attacker/tools && chown -R attacker:attacker /home/attacker
-WORKDIR /home/attacker
+WORKDIR /home/test
 
 # Make /tmp writable by all (for script temp files)
 RUN chmod 1777 /tmp
@@ -56,7 +53,10 @@ COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 # Setup SSH and User Access (mimicking cyberrangecz/ansible-role-user-access)
-RUN mkdir -p /var/run/sshd && echo 'attacker:attacker' | chpasswd
+RUN mkdir -p /var/run/sshd && echo 'test:password' | chpasswd
+
+# Create test user with proper home directory
+RUN useradd -m -s /bin/bash test 2>/dev/null || true && echo 'test:password' | chpasswd
 
 # Configure SSH authentication and X11 Forwarding
 RUN mkdir -p /etc/ssh/sshd_config.d && \
@@ -74,12 +74,12 @@ RUN sed -i '/^ChallengeResponseAuthentication/d' /etc/ssh/sshd_config && \
 RUN sed -i 's/session\s*required\s*pam_loginuid.so/session optional pam_loginuid.so/g' /etc/pam.d/sshd || true
 
 # Ensure Correct Permissions
-RUN mkdir -p /home/attacker/.ssh && \
-    chown attacker:attacker /home/attacker/.ssh && \
-    chmod 700 /home/attacker/.ssh
+RUN mkdir -p /home/test/.ssh && \
+    chown test:test /home/test/.ssh && \
+    chmod 700 /home/test/.ssh
 
-# Configure passwordless sudo for attacker
-RUN echo 'attacker ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+# Configure passwordless sudo for test user
+RUN echo 'test ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
 
 EXPOSE 22
 

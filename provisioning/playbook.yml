@@ -87,8 +87,8 @@
           Welcome to the Smart Home PV Challenge!
           
           The challenge environment is running in Docker containers.
-          To access the attacker machine, SSH to port 2224:
-          ssh -p 2224 test@localhost
+          To access the attacker machine:
+          ssh test@localhost
           Password: password
           
           The PV Controller Dashboard is at http://localhost:8081
