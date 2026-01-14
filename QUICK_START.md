@@ -22,17 +22,22 @@ Once provisioning is complete, you'll have access to 4 VMs:
 - Handles network routing
 - Usually no direct access needed
 
-### Blue Team VM (10.10.10.10)
+### Green Team VM (10.10.10.10)
 ```bash
-ssh debian@<blueteam-vm-ip>
-# Default password provided by platform
+ssh debian@<green-team-vm-ip>
+# Password is defined via `variables.yml` (default: cyberrange123)
 ```
 
-**Services to check:**
+**Web UI:**
+```
+http://10.10.10.10/
+```
+
+**Services to check on the VM:**
 ```bash
-systemctl status pv-controller
-systemctl status mosquitto
-systemctl status victim-simulator
+cd /opt/smart-home-pv
+docker compose ps
+docker compose logs -f --tail=200
 ```
 
 ### Attacker VM (10.10.10.20) - Your Main Workspace
@@ -46,18 +51,18 @@ Password: attacker
 # Scan the network
 nmap -sn 10.10.10.0/24
 
-# Scan Blue Team services
+# Scan Green Team services
 nmap -sV -p- 10.10.10.10
 
 # Check tools
 ls ~/tools/
 ```
 
-### Admin Dashboard VM (10.10.10.30)
-Access via web browser:
+### Blue Team VM (10.10.10.30)
+Access ntopng via web browser:
 ```
-http://<admin-dashboard-ip>
-# Or internally: http://10.10.10.30
+http://<blue-team-vm-ip>:3000
+# Or internally: http://10.10.10.30:3000
 ```
 
 ## Step 3: Start Attacking
@@ -107,42 +112,26 @@ curl -X POST http://10.10.10.10/api/admin/login \
   -d '{"username":"admin'\'' OR 1=1--","password":"anything"}'
 
 # Test for XSS
-# Navigate to admin dashboard and inject scripts
+# Navigate to the PV web UI and inject scripts
 ```
 
 ## Step 4: Monitor from Blue Team
 
-From the **Blue Team VM**, monitor attacks:
+Use **ntopng** to observe traffic patterns during attacks:
 
+- Open: `http://10.10.10.30:3000`
+- Default upstream credentials are typically `admin` / `admin` (if prompted)
+
+Optional host-level capture on the Blue Team VM:
 ```bash
-# Watch security events
-tail -f /opt/pv-controller/logs/security_events.json
-
-# View blocked IPs
-cat /opt/pv-controller/logs/blocked_ips.json
-
-# Check failed logins
-cat /opt/pv-controller/logs/failed_logins.json
-
-# Analyze packet captures
-tcpdump -r /opt/pv-controller/logs/traffic.pcap
-tshark -r /opt/pv-controller/logs/mqtt_hijack.pcap
+sudo tcpdump -i "$(ip route show default | awk '{print $5; exit}')" -nn -s0 -w /tmp/game-net.pcap
 ```
 
-## Step 5: Use Admin Dashboard
-
-Open the dashboard at `http://10.10.10.30` or `http://<admin-dashboard-ip>`
-
-**Features:**
-- Real-time PV system status
-- Security event timeline
-- MQTT message viewer
-- Modbus traffic monitor
-- Diagnostics panel
-
-**Login (if prompted):**
-- Check training materials for credentials
-- Or attempt to discover via reconnaissance
+For application logs and PCAP artifacts, use the **Green Team VM** (Docker bind-mount):
+```bash
+ssh debian@10.10.10.10
+ls -la /opt/smart-home-pv/logs/
+```
 
 ## Common Issues
 
@@ -153,40 +142,32 @@ Open the dashboard at `http://10.10.10.30` or `http://<admin-dashboard-ip>`
 
 # Verify network connectivity
 ping 10.10.10.1  # Router
-ping 10.10.10.10 # Blue Team
+ping 10.10.10.10 # Green Team
 ping 10.10.10.20 # Attacker
-ping 10.10.10.30 # Dashboard
+ping 10.10.10.30 # Blue Team
 ```
 
 ### Services not responding
 ```bash
-# SSH to Blue Team VM
+# Green Team: check Docker stack
 ssh debian@10.10.10.10
+cd /opt/smart-home-pv
+docker compose ps
+docker compose logs -f --tail=200
 
-# Check service status
-systemctl status pv-controller
-systemctl status mosquitto
-
-# Restart if needed
-sudo systemctl restart pv-controller
-
-# View logs for errors
-journalctl -u pv-controller -n 50
+# Blue Team: check ntopng + redis
+ssh debian@10.10.10.30
+sudo systemctl status ntopng
+sudo systemctl status redis-server
 ```
 
-### Dashboard not loading
+### Web UI not loading
 ```bash
-# SSH to Admin Dashboard VM
-ssh ubuntu@10.10.10.30
+# Green Team: PV stack web UI should be on port 80
+curl -i http://10.10.10.10/
 
-# Check Nginx
-systemctl status nginx
-
-# Check if build exists
-ls -la /opt/admin-dashboard/dist/
-
-# View Nginx logs
-tail -f /var/log/nginx/error.log
+# Blue Team: ntopng should be on port 3000
+curl -i http://10.10.10.30:3000/
 ```
 
 ### Tools missing on Attacker VM

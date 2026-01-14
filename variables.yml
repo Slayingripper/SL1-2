@@ -29,14 +29,19 @@ admin_password:
   length: 16
 
 # SSH Credentials for VMs
-blueteam_password:
+green_team_password:
   value: "cyberrange123"
 
 attacker_password:
+  value: "attacker"
+
+blue_team_password:
   value: "cyberrange123"
 
-admin_dashboard_password:
-  value: "cyberrange123"
+# Base image selector for the attacker VM.
+# If your CyberRangeCZ platform provides a Kali base box, set this value accordingly.
+attacker_base_image:
+  value: "debian-12-x86_64"
 
 router_password:
   value: "cyberrange123"

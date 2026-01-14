@@ -8,7 +8,7 @@ services:
       playground-net:
         ipv4_address: 172.20.0.65
     ports:
-      - "8081:80"  # Expose PV controller admin dashboard
+      - "80:80"  # Expose PV controller admin dashboard on green-team VM
       - "15002:15002" # Expose Modbus TCP for external tools using 15002
     environment:
       - MQTT_HOST=mosquitto
@@ -38,26 +38,6 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-
-  attacker:
-    build:
-      context: ./tools/attacker
-    image: scl-challenge-smart-home-pv-attacker
-    container_name: scl-challenge-smart-home-pv-attacker
-    restart: on-failure
-    networks:
-      playground-net:
-        ipv4_address: 172.20.0.70
-    cap_add:
-      - NET_RAW
-      - NET_ADMIN
-    volumes:
-      - ./tools/attacker:/home/attacker/tools
-      - ./logs:/opt/pv-controller/logs
-    tty: true
-    # PORTS MAPPING REMOVED TO PREVENT HOST SSH CONFLICT AND TUNNEL ISSUES
-    # The container SSH port 22 is reachable internally via 172.20.0.70:22.
-    # Default command in Dockerfile will start sshd
 
   noise:
     build:

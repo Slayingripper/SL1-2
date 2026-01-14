@@ -1,0 +1,68 @@
+---
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Install Docker engine and Compose plugin
+  apt:
+    name:
+      - docker.io
+      - docker-compose-plugin
+      - python3
+      - python3-pip
+    state: present
+
+- name: Ensure Docker service is enabled and running
+  service:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Ensure playground docker network exists (for fixed container IPs)
+  command: docker network inspect playground-net
+  register: playground_net_inspect
+  failed_when: false
+  changed_when: false
+
+- name: Create playground docker network
+  command: docker network create --driver bridge --subnet 172.20.0.0/24 playground-net
+  when: playground_net_inspect.rc != 0
+
+- name: Create application directory
+  file:
+    path: /opt/smart-home-pv
+    state: directory
+    mode: '0755'
+
+- name: Copy Smart Home PV stack files
+  copy:
+    src: "{{ playbook_dir }}/files/smart-home-pv/"
+    dest: /opt/smart-home-pv/
+    mode: '0755'
+
+- name: Bring up Docker Compose stack
+  command: docker compose up -d --build
+  args:
+    chdir: /opt/smart-home-pv
+
+- name: Add MOTD for green team
+  copy:
+    dest: /etc/motd
+    content: |
+      ================================
+      GREEN TEAM - SMART HOME PV STACK
+      ================================
+
+      This VM runs the Smart Home PV Docker stack.
+
+      Web UI:
+      - PV Controller / Admin UI: http://10.10.10.10/
+
+      Service management:
+      - cd /opt/smart-home-pv
+      - docker compose ps
+      - docker compose logs -f --tail=200
+      - docker compose restart
+
+      Note: Containers use the docker network 'playground-net' (172.20.0.0/24).
+      ================================

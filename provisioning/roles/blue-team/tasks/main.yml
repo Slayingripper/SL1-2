@@ -1,0 +1,59 @@
+---
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Install ntopng and dependencies
+  apt:
+    name:
+      - ntopng
+      - redis-server
+      - ethtool
+      - tcpdump
+    state: present
+
+- name: Enable and start Redis
+  service:
+    name: redis-server
+    state: started
+    enabled: yes
+
+- name: Determine primary interface
+  set_fact:
+    ntopng_interface: "{{ ansible_default_ipv4.interface }}"
+
+- name: Configure ntopng
+  copy:
+    dest: /etc/ntopng/ntopng.conf
+    mode: '0644'
+    content: |
+      --interface={{ ntopng_interface }}
+      --local-networks=10.10.10.0/24
+      --http-port=3000
+      --dns-mode=1
+      --disable-login=0
+
+- name: Ensure ntopng is enabled and restarted
+  service:
+    name: ntopng
+    state: restarted
+    enabled: yes
+
+- name: Add MOTD for blue team
+  copy:
+    dest: /etc/motd
+    content: |
+      ================================
+      BLUE TEAM - NETWORK MONITORING
+      ================================
+
+      This VM runs ntopng for network monitoring.
+
+      Web UI:
+      - http://10.10.10.30:3000
+
+      Default credentials (upstream default):
+      - admin / admin
+
+      If prompted, change the password on first login.
+      ================================

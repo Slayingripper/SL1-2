@@ -1,9 +1,76 @@
 ---
-# Blue Team VM - Hosts PV Controller and victim simulator
-- hosts: blueteam
+# Ensure CyberRangeCZ management credentials actually work on the VMs.
+# Some base images ship with locked passwords and/or SSH password auth disabled.
+- hosts: "all:!localhost"
+  become: yes
+  vars:
+    mgmt_user_by_host:
+      green-team: debian
+      attacker: attacker
+      blue-team: debian
+      router: debian
+    mgmt_pass_by_host:
+      green-team: "{{ green_team_password.value | default(green_team_password) }}"
+      attacker: "{{ attacker_password.value | default(attacker_password) }}"
+      blue-team: "{{ blue_team_password.value | default(blue_team_password) }}"
+      router: "{{ router_password.value | default(router_password) }}"
+  tasks:
+    - name: Select management user and password
+      set_fact:
+        cr_mgmt_user: "{{ mgmt_user_by_host.get(inventory_hostname, 'debian') }}"
+        cr_mgmt_pass: "{{ mgmt_pass_by_host.get(inventory_hostname, (green_team_password.value | default(green_team_password))) }}"
+
+    - name: Ensure management user exists
+      user:
+        name: "{{ cr_mgmt_user }}"
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Ensure management user can sudo without password
+      copy:
+        dest: "/etc/sudoers.d/90-{{ cr_mgmt_user }}-nopasswd"
+        content: "{{ cr_mgmt_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        mode: '0440'
+
+    - name: Set management user password
+      command: chpasswd
+      args:
+        stdin: "{{ cr_mgmt_user }}:{{ cr_mgmt_pass }}"
+      no_log: true
+
+    - name: Ensure SSH password authentication is enabled (drop-in)
+      copy:
+        dest: /etc/ssh/sshd_config.d/99-cyberrange-password-auth.conf
+        content: |
+          PasswordAuthentication yes
+          KbdInteractiveAuthentication yes
+          UsePAM yes
+        mode: '0644'
+
+    - name: Ensure SSH password authentication is enabled (main config)
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication\\s+'
+        line: 'PasswordAuthentication yes'
+        state: present
+
+    - name: Restart SSH service
+      block:
+        - name: Restart ssh
+          service:
+            name: ssh
+            state: restarted
+      rescue:
+        - name: Restart sshd
+          service:
+            name: sshd
+            state: restarted
+
+# Green Team VM - Runs the Dockerized Smart Home PV stack and web UI
+- hosts: green-team
   become: yes
   roles:
-    - blueteam
+    - green-team
 
 # Attacker VM - Penetration testing tools and attack scripts
 - hosts: attacker
@@ -11,8 +78,8 @@
   roles:
     - attacker
 
-# Admin Dashboard VM - React-based monitoring interface
-- hosts: admin-dashboard
+# Blue Team VM - Network monitoring (ntopng)
+- hosts: blue-team
   become: yes
   roles:
-    - admin-dashboard
+    - blue-team

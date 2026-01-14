@@ -1,24 +1,26 @@
 name: smart-home-pv-sandbox
 hosts:
-  - name: blueteam
+  - name: green-team
     base_box:
       image: debian-12-x86_64
       mgmt_user: debian
-      mgmt_pass: "{{ blueteam_password }}"
+      mgmt_pass: "{{ green_team_password.value | default(green_team_password) }}"
     flavor: standard.small
-  
+
   - name: attacker
     base_box:
+      # Set this to a Kali image name available in your CyberRangeCZ platform.
+      # Example (if supported): kali-2024-x86_64
+      image: "{{ attacker_base_image }}"
+      mgmt_user: attacker
+      mgmt_pass: "{{ attacker_password.value | default(attacker_password) }}"
+    flavor: standard.small
+
+  - name: blue-team
+    base_box:
       image: debian-12-x86_64
       mgmt_user: debian
-      mgmt_pass: "{{ attacker_password }}"
-    flavor: standard.small
-  
-  - name: admin-dashboard
-    base_box:
-      image: ubuntu-noble-x86_64
-      mgmt_user: ubuntu
-      mgmt_pass: "{{ admin_dashboard_password }}"
+      mgmt_pass: "{{ blue_team_password.value | default(blue_team_password) }}"
     flavor: standard.small
 
 routers:
@@ -26,7 +28,7 @@ routers:
     base_box:
       image: debian-12-x86_64
       mgmt_user: debian
-      mgmt_pass: "{{ router_password }}"
+      mgmt_pass: "{{ router_password.value | default(router_password) }}"
     flavor: standard.small
 
 wan:
@@ -38,7 +40,7 @@ networks:
     cidr: 10.10.10.0/24
 
 net_mappings:
-  - host: blueteam
+  - host: green-team
     network: game-net
     ip: 10.10.10.10
   
@@ -46,7 +48,7 @@ net_mappings:
     network: game-net
     ip: 10.10.10.20
   
-  - host: admin-dashboard
+  - host: blue-team
     network: game-net
     ip: 10.10.10.30
 
@@ -58,6 +60,6 @@ router_mappings:
 groups:
   - name: game-nodes
     nodes:
-      - blueteam
+      - green-team
       - attacker
-      - admin-dashboard
+      - blue-team

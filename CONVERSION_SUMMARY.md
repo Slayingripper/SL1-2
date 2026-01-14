@@ -1,8 +1,8 @@
-# Conversion Summary: Docker to VM-Based Architecture
+# Conversion Summary: Docker to Red/Green/Blue VM-Based Architecture
 
 ## Overview
 
-Successfully converted the Smart Home PV Cyber Range from a single-VM Docker-based architecture to a multi-VM native architecture with three separate virtual machines.
+Successfully converted the Smart Home PV Cyber Range from a single-VM Docker-based architecture to a multi-VM **red/green/blue** architecture with three separate virtual machines.
 
 ## Changes Made
 
@@ -12,9 +12,9 @@ Successfully converted the Smart Home PV Cyber Range from a single-VM Docker-bas
 
 **Changes:**
 - Replaced single `game-server` VM with three VMs:
-  - `blueteam` (10.10.10.10) - Debian 12
-  - `attacker` (10.10.10.20) - Debian 12
-  - `admin-dashboard` (10.10.10.30) - Ubuntu Noble
+  - `green-team` (10.10.10.10) - Debian 12 (runs the Docker/Compose PV stack)
+  - `attacker` (10.10.10.20) - Debian 12 (optionally Kali, if available on the platform)
+  - `blue-team` (10.10.10.30) - Debian 12 (runs ntopng)
 - Kept router VM for network management
 - Updated network mappings for new IP scheme (10.10.10.0/24)
 - Added all VMs to `game-nodes` group
@@ -24,11 +24,11 @@ Successfully converted the Smart Home PV Cyber Range from a single-VM Docker-bas
 **File:** `provisioning/playbook.yml`
 
 **Changes:**
-- Removed Docker/Docker Compose installation
+- Enforces CyberRangeCZ management credentials inside each VM (user exists + password set + SSH password auth enabled)
 - Split into three role-based plays:
-  - `blueteam` role for PV controller
+  - `green-team` role for Docker/Compose stack deployment
   - `attacker` role for penetration testing tools
-  - `admin-dashboard` role for monitoring interface
+  - `blue-team` role for ntopng monitoring
 
 **New Structure:**
 ```
@@ -36,35 +36,28 @@ provisioning/
 ├── playbook.yml (main orchestration)
 ├── requirements.yml (removed Docker dependencies)
 └── roles/
-    ├── blueteam/
-    │   ├── tasks/main.yml
-    │   └── handlers/main.yml
+  ├── green-team/
+  │   ├── tasks/main.yml
+  │   └── handlers/main.yml
     ├── attacker/
     │   ├── tasks/main.yml
     │   └── handlers/main.yml
-    └── admin-dashboard/
-        ├── tasks/main.yml
-        └── handlers/main.yml
+  └── blue-team/
+    ├── tasks/main.yml
+    └── handlers/main.yml
 ```
 
-### 3. Blue Team Role (provisioning/roles/blueteam/)
+### 3. Green Team Role (provisioning/roles/green-team/)
 
 **Provisions:**
-- Python 3 and dependencies (Flask, paho-mqtt, pymodbus, scapy)
-- Mosquitto MQTT broker
-- PV controller application from source
-- Victim simulator (Node.js)
-- Systemd services for all components
+- Docker engine + Docker Compose plugin
+- External docker network `playground-net` (172.20.0.0/24)
+- Deploys the stack from `provisioning/files/smart-home-pv/` to `/opt/smart-home-pv/`
 
-**Services Created:**
-- `pv-controller.service` - Main PV controller (port 80)
-- `mosquitto.service` - MQTT broker (ports 1883, 9001)
-- `victim-simulator.service` - Automated victim behavior
-
-**Configuration:**
-- Application directory: `/opt/pv-controller/`
-- Logs directory: `/opt/pv-controller/logs/`
-- Mosquitto config: `/etc/mosquitto/mosquitto.conf`
+**Services:**
+- PV stack web UI on `http://10.10.10.10/`
+- Modbus TCP on `10.10.10.10:15002`
+- MQTT WebSocket on `ws://10.10.10.10:9001`
 
 ### 4. Attacker Role (provisioning/roles/attacker/)
 
@@ -85,23 +78,11 @@ provisioning/
 - `/home/attacker/tools/` - Custom attack scripts
 - System PATH - All installed tools
 
-### 5. Admin Dashboard Role (provisioning/roles/admin-dashboard/)
+### 5. Blue Team Role (provisioning/roles/blue-team/)
 
 **Provisions:**
-- Node.js and npm
-- Nginx web server
-- React dashboard application
-- Production build environment
-
-**Configuration:**
-- Source: `/opt/admin-dashboard/`
-- Built files: `/opt/admin-dashboard/dist/`
-- Nginx config: `/etc/nginx/sites-available/admin-dashboard`
-- Environment variables for API endpoints
-
-**Services:**
-- Nginx serving React SPA (port 80)
-- Proxies API requests to Blue Team VM
+- ntopng + redis-server
+- Web UI on `http://10.10.10.30:3000`
 
 ### 6. Documentation Updates
 
@@ -212,7 +193,8 @@ Router (10.10.10.1)
 
 ✅ **Educational Value**
 - More representative of production
-- Real service management (systemd)
+- Real multi-host segmentation (separate OS per role)
+- Practical container operations on a dedicated host
 - Actual network configuration
 
 ✅ **Professional Experience**
@@ -230,51 +212,43 @@ Router (10.10.10.1)
 
 ## Files Created
 
-1. `provisioning/roles/blueteam/tasks/main.yml`
-2. `provisioning/roles/blueteam/handlers/main.yml`
+1. `provisioning/roles/green-team/tasks/main.yml`
+2. `provisioning/roles/green-team/handlers/main.yml`
 3. `provisioning/roles/attacker/tasks/main.yml`
 4. `provisioning/roles/attacker/handlers/main.yml`
-5. `provisioning/roles/admin-dashboard/tasks/main.yml`
-6. `provisioning/roles/admin-dashboard/handlers/main.yml`
+5. `provisioning/roles/blue-team/tasks/main.yml`
+6. `provisioning/roles/blue-team/handlers/main.yml`
 7. `VM_ARCHITECTURE.md`
 8. `MIGRATION_GUIDE.md`
 9. `QUICK_START.md`
 
-## Files Preserved (Not Used)
+## Files Used (Provisioned)
 
-The following Docker-related files remain in the repository for reference but are not used in VM provisioning:
+The following files are actively used during VM provisioning:
 
-- `provisioning/files/smart-home-pv/docker-compose.yml`
-- `provisioning/files/smart-home-pv/Dockerfile`
-- `provisioning/files/smart-home-pv/tools/attacker/Dockerfile`
-- `provisioning/files/smart-home-pv/tools/victim/Dockerfile`
-- `provisioning/files/smart-home-pv/tools/noise/Dockerfile`
-- `provisioning/files/smart-home-pv/tools/replayer/Dockerfile`
-
-The application source code is still copied to VMs and runs natively.
+- `provisioning/files/smart-home-pv/docker-compose.yml` (deployed to `/opt/smart-home-pv` on Green Team)
+- `provisioning/files/smart-home-pv/Dockerfile` (used when building the PV controller container)
+- `provisioning/files/smart-home-pv/tools/*` (used by containers inside the Compose stack)
 
 ## Testing Checklist
 
 - ✅ Topology defines 3 VMs + router
 - ✅ Network IPs assigned (10.10.10.0/24)
 - ✅ Ansible playbook has 3 roles
-- ✅ Blue Team role installs PV controller
-- ✅ Blue Team role configures systemd services
+- ✅ Green Team role installs Docker/Compose and starts the stack
+- ✅ Blue Team role installs and starts ntopng + redis
 - ✅ Attacker role installs pentest tools
 - ✅ Attacker role creates user with SSH access
-- ✅ Admin Dashboard role builds React app
-- ✅ Admin Dashboard role configures Nginx
+- ✅ Documentation updated for VM access
 - ✅ Documentation updated for VM access
 - ✅ Training content reflects new architecture
 - ✅ IP addresses consistent across all files
 
 ## Known Limitations
 
-1. **Noise Generator** - Not implemented as separate service (was Docker container)
-2. **Replayer** - Not implemented as separate service (was Docker container)
-3. **Telemetry Seeder** - Not implemented (was Docker container)
+1. **ntopng package availability** - Some base images/repos may not include `ntopng` by default.
 
-These components were Docker-specific noise generators and can be re-implemented if needed, but the core functionality (attacks, monitoring, challenges) is fully preserved.
+If `apt install ntopng` fails on your platform, the Blue Team role will need either an upstream repo for ntopng or an alternative monitoring stack.
 
 ## Deployment Requirements
 

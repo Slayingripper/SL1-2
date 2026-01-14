@@ -15,7 +15,7 @@
       "level_type": "INFO_LEVEL",
       "order": 0,
       "estimated_duration": 0,
-      "content": "# Smart Home PV Challenge\n\nWelcome to the Smart Home PV Challenge. You will be attacking a simulated Smart Home Photovoltaic (PV) Controller environment.\n\n## Scenario\n\nYou have gained access to a network where a vulnerable PV Controller is running. Your goal is to exploit various vulnerabilities to gain control over the system and disrupt energy production.\n\n## Architecture\n\nThis cyber range consists of three separate virtual machines:\n\n- **Blue Team VM** (10.10.10.10): Hosts the PV Controller, MQTT broker, and victim simulator\n- **Attacker VM** (10.10.10.20): Your attack platform with pre-installed tools\n- **Admin Dashboard VM** (10.10.10.30): React-based monitoring interface\n\n## Tools\n\nThe attacker VM comes pre-installed with tools like `nmap`, `hydra`, `nikto`, `tcpdump`, `scapy`, and custom attack scripts in `/home/attacker/tools/`.\n"
+      "content": "# Smart Home PV Challenge\n\nWelcome to the Smart Home PV Challenge. You will be attacking a simulated Smart Home Photovoltaic (PV) Controller environment.\n\n## Scenario\n\nYou have gained access to a network where a vulnerable PV Controller is running. Your goal is to exploit various vulnerabilities to gain control over the system and disrupt energy production.\n\n## Architecture\n\nThis cyber range consists of three separate virtual machines:\n\n- **Green Team VM** (10.10.10.10): Runs the Smart Home PV Docker stack and exposes the web UI\n- **Attacker VM** (10.10.10.20): Your attack platform with pre-installed tools and scripts\n- **Blue Team VM** (10.10.10.30): Network monitoring with ntopng\n\n## Tools\n\nThe attacker VM comes pre-installed with tools like `nmap`, `hydra`, `nikto`, `tcpdump`, `scapy`, and custom attack scripts in `/home/attacker/tools/`.\n"
     },
     {
       "title": "Access",
@@ -23,7 +23,7 @@
       "order": 1,
       "estimated_duration": 0,
       "passkey": "start",
-      "cloud_content": "Access the **attacker VM** via SSH:\n\n```\nssh attacker@<attacker-vm-ip>\n```\nPassword: `attacker`\n\nAlternatively, use the IP address 10.10.10.20 from within the network.\n\nTarget systems:\n- Blue Team (PV Controller): 10.10.10.10\n- Admin Dashboard: 10.10.10.30\n\nOnce you are ready, submit the flag `start`.",
+      "cloud_content": "Access the **attacker VM** via SSH:\n\n```\nssh attacker@<attacker-vm-ip>\n```\nPassword: `attacker`\n\nAlternatively, use the IP address 10.10.10.20 from within the network.\n\nTargets / references:\n- Green Team (PV stack web UI): http://10.10.10.10/\n- Blue Team (ntopng): http://10.10.10.30:3000\n\nOnce you are ready, submit the flag `start`.",
       "local_content": "This sandbox has not been tested for use with local sandbox."
     },
     {

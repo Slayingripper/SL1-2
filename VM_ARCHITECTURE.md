@@ -2,50 +2,28 @@
 
 ## Overview
 
-This cyber range has been converted from a Docker-based architecture to a VM-based architecture for more realistic network segmentation and better representation of real-world infrastructure.
+This cyber range is designed as a **red/green/blue** VM-based environment:
+
+- **Green Team VM (10.10.10.10):** runs the Smart Home PV environment as a Docker/Compose stack and exposes the web UI
+- **Attacker VM (10.10.10.20):** offensive tooling and scripts (optionally Kali, if your platform provides a Kali base box)
+- **Blue Team VM (10.10.10.30):** runs ntopng for network monitoring
 
 ## Architecture Components
 
-### 1. Blue Team VM (10.10.10.10)
+### 1. Green Team VM (10.10.10.10)
 **Base Image:** Debian 12 (x86_64)  
 **Flavor:** standard.small  
-**Purpose:** Production infrastructure hosting PV controller services
+**Purpose:** Runs the Dockerized Smart Home PV stack and exposes the web UI
 
 #### Services Running:
-- **PV Controller** (Port 80)
-  - Python Flask application
-  - Manages solar panel operations
-  - Provides REST API and web interface
-  - Systemd service: `pv-controller.service`
-  
-- **Mosquitto MQTT Broker** (Ports 1883, 9001)
-  - Message broker for IoT device communication
-  - Port 1883: Standard MQTT
-  - Port 9001: WebSocket for web clients
-  - Systemd service: `mosquitto.service`
-  
-- **Modbus TCP Server** (Port 15002)
-  - Industrial Control System (ICS) protocol
-  - Embedded in PV controller application
-  - Used for inverter control
-  
-- **Victim Simulator** (background)
-  - Node.js application
-  - Simulates legitimate user behavior
-  - Periodically accesses PV controller
-  - Systemd service: `victim-simulator.service`
+- **PV Controller Web UI** (Port 80)
+- **Modbus TCP** (Port 15002)
+- **Mosquitto MQTT Broker** (Port 1883 internal, Port 9001 WebSocket)
+- Supporting containers: victim/noise/replayer/telemetry-seeder
 
 #### File Locations:
-- Application: `/opt/pv-controller/`
-- Logs: `/opt/pv-controller/logs/`
-- Configuration: `/opt/pv-controller/mosquitto-config/`
-
-#### Security Events Logged:
-- Failed login attempts
-- Suspicious API calls
-- Blocked IPs
-- MQTT/Modbus anomalies
-- Packet captures (PCAP files)
+- Stack directory: `/opt/smart-home-pv/`
+- Logs (bind-mounted): `/opt/smart-home-pv/logs/`
 
 ---
 
@@ -79,33 +57,14 @@ This cyber range has been converted from a Docker-based architecture to a VM-bas
 
 ---
 
-### 3. Admin Dashboard VM (10.10.10.30)
-**Base Image:** Ubuntu Noble (x86_64)  
+### 3. Blue Team VM (10.10.10.30)
+**Base Image:** Debian 12 (x86_64)  
 **Flavor:** standard.small  
-**Purpose:** Security operations center monitoring interface
+**Purpose:** Network monitoring using ntopng
 
 #### Services Running:
-- **Nginx Web Server** (Port 80)
-  - Serves React SPA
-  - Proxies API requests to Blue Team VM
-  - Systemd service: `nginx.service`
-
-#### Dashboard Features:
-- Real-time PV system monitoring
-- Security event visualization
-- MQTT message stream
-- Modbus traffic analysis
-- Incident response tools
-- Container switching (legacy feature)
-
-#### File Locations:
-- Source: `/opt/admin-dashboard/`
-- Built files: `/opt/admin-dashboard/dist/`
-- Nginx config: `/etc/nginx/sites-available/admin-dashboard`
-
-#### Environment:
-- PV Controller API: http://10.10.10.10
-- MQTT Broker: ws://10.10.10.10:9001
+- **ntopng** (Port 3000)
+  - Web UI: http://10.10.10.30:3000
 
 ---
 
@@ -139,7 +98,7 @@ This cyber range has been converted from a Docker-based architecture to a VM-bas
                         |
         +---------------+----------------+
         |               |                |
-   Blue Team      Attacker VM      Admin Dashboard
+  Green Team     Attacker VM        Blue Team
   (10.10.10.10)  (10.10.10.20)     (10.10.10.30)
 ```
 
@@ -147,7 +106,7 @@ This cyber range has been converted from a Docker-based architecture to a VM-bas
 
 ## Attack Surface
 
-### Blue Team VM (10.10.10.10)
+### Green Team VM (10.10.10.10)
 
 | Port  | Service        | Protocol | Vulnerabilities                           |
 |-------|----------------|----------|-------------------------------------------|
@@ -156,11 +115,11 @@ This cyber range has been converted from a Docker-based architecture to a VM-bas
 | 9001  | MQTT WebSocket | WS       | Session token exposure                    |
 | 15002 | Modbus TCP     | Modbus   | No authentication, Coil manipulation     |
 
-### Admin Dashboard VM (10.10.10.30)
+### Blue Team VM (10.10.10.30)
 
-| Port | Service | Protocol | Vulnerabilities                    |
-|------|---------|----------|------------------------------------|
-| 80   | Nginx   | HTTP     | XSS, CSRF, Exposed admin functions |
+| Port | Service | Protocol | Notes         |
+|------|---------|----------|---------------|
+| 3000 | ntopng  | HTTP     | Monitoring UI |
 
 ---
 
@@ -183,7 +142,7 @@ This cyber range has been converted from a Docker-based architecture to a VM-bas
 ### 3. Modbus Exploitation
 **Objective:** Manipulate industrial control coils  
 **Tools:** pymodbus, custom scripts  
-**Target:** Port 15002 on Blue Team VM  
+**Target:** Port 15002 on Green Team VM  
 **Steps:**
 1. Connect to Modbus TCP server
 2. Read holding registers
@@ -243,14 +202,12 @@ Single VM (game-server)
 ```
 Router (10.10.10.1)
   └── Game Network (10.10.10.0/24)
-       ├── Blue Team VM (10.10.10.10)
-       │    ├── PV Controller (systemd)
-       │    ├── Mosquitto (systemd)
-       │    └── Victim Simulator (systemd)
+     ├── Green Team VM (10.10.10.10)
+     │    └── Smart Home PV stack (Docker/Compose)
        ├── Attacker VM (10.10.10.20)
        │    └── Penetration testing tools
-       └── Admin Dashboard VM (10.10.10.30)
-            └── Nginx + React SPA
+     └── Blue Team VM (10.10.10.30)
+        └── ntopng (web UI)
 ```
 
 **Characteristics:**
@@ -293,50 +250,38 @@ Router (10.10.10.1)
 
 ## Service Management Commands
 
+### Green Team VM
+
+```bash
+# Stack status
+cd /opt/smart-home-pv
+docker compose ps
+
+# Tail logs
+docker compose logs -f --tail=200
+
+# Restart stack
+docker compose restart
+
+# Host-level check of exposed ports
+ss -lntp | egrep ':(80|9001|15002)'
+```
+
 ### Blue Team VM
 
 ```bash
-# Check PV controller status
-systemctl status pv-controller
+# Check ntopng + redis
+systemctl status ntopng
+systemctl status redis-server
 
-# View PV controller logs
-journalctl -u pv-controller -f
-
-# Restart PV controller
-systemctl restart pv-controller
-
-# Check MQTT broker
-systemctl status mosquitto
-
-# View security events
-tail -f /opt/pv-controller/logs/security_events.json
-
-# Analyze packet captures
-tcpdump -r /opt/pv-controller/logs/traffic.pcap
-```
-
-### Admin Dashboard VM
-
-```bash
-# Check Nginx status
-systemctl status nginx
-
-# View Nginx logs
-tail -f /var/log/nginx/access.log
-tail -f /var/log/nginx/error.log
-
-# Restart Nginx
-systemctl restart nginx
-
-# Rebuild dashboard (if modified)
-cd /opt/admin-dashboard
-npm run build
+# View ntopng logs
+journalctl -u ntopng -f
 ```
 
 ### Attacker VM
 
 ```bash
-# Scan Blue Team VM
+# Scan Green Team VM
 nmap -sV -p- 10.10.10.10
 
 # Test MQTT connection
@@ -388,17 +333,11 @@ traceroute 10.10.10.10
 ### Dashboard Not Loading
 
 ```bash
-# Check if built files exist
-ls -la /opt/admin-dashboard/dist/
+# Check PV stack web UI on Green Team
+curl -i http://10.10.10.10/
 
-# Verify Nginx configuration
-nginx -t
-
-# Check Nginx is running
-systemctl status nginx
-
-# Test backend API
-curl http://10.10.10.10/api/health
+# Check ntopng on Blue Team
+curl -i http://10.10.10.30:3000/
 ```
 
 ---

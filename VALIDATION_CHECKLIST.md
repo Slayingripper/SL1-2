@@ -126,35 +126,29 @@ ssh attacker@10.10.10.20
   # Should show attacker_modbus.py, demo_attacks.sh, etc.
   ```
 
-### Admin Dashboard Services
+### Blue Team Services (ntopng)
 
 ```bash
-# SSH to Admin Dashboard VM
-ssh ubuntu@10.10.10.30
+# SSH to Blue Team VM
+ssh debian@10.10.10.30
 ```
 
-- [ ] Nginx service running
+- [ ] Redis running
   ```bash
-  systemctl status nginx
+  systemctl status redis-server
   # Should show: active (running)
   ```
 
-- [ ] Built files exist
+- [ ] ntopng running
   ```bash
-  ls -la /opt/admin-dashboard/dist/
-  # Should show index.html and assets/
+  systemctl status ntopng
+  # Should show: active (running)
   ```
 
-- [ ] Nginx config valid
+- [ ] ntopng reachable locally
   ```bash
-  nginx -t
-  # Should show: syntax is ok, test is successful
-  ```
-
-- [ ] Dashboard accessible locally
-  ```bash
-  curl http://localhost
-  # Should return HTML
+  curl -I http://localhost:3000/
+  # Should return HTTP headers
   ```
 
 ## Network Connectivity
@@ -428,17 +422,17 @@ If any checks fail, consult:
    - Check: `ping 10.10.10.1`
 
 3. **Dashboard not loading**
-   - Check: `/var/log/nginx/error.log`
-   - Check: Build exists at `/opt/admin-dashboard/dist/`
-   - Action: `systemctl restart nginx`
+  - Green Team web UI: `curl -I http://10.10.10.10/`
+  - Blue Team ntopng: `curl -I http://10.10.10.30:3000/`
+  - Action: restart stack (`docker compose restart`) or `systemctl restart ntopng`
 
 4. **Python errors**
    - Check: `pip3 list | grep <package>`
    - Action: `pip3 install <package>`
 
 5. **Permissions issues**
-   - Check: `ls -la /opt/pv-controller/`
-   - Action: `chmod 755 /opt/pv-controller/`
+  - Check: `ls -la /opt/smart-home-pv/`
+  - Action: `chmod -R a+rX /opt/smart-home-pv/`
 
 ## Final Validation
 

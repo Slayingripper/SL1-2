@@ -8,7 +8,7 @@ This document explains the migration from Docker-based to VM-based architecture 
 
 1. **Infrastructure**
    - **Before:** Single VM running Docker containers
-   - **After:** Three separate VMs (blueteam, attacker, admin-dashboard)
+  - **After:** Three separate VMs (green-team, attacker, blue-team)
 
 2. **Networking**
    - **Before:** Docker network (172.20.0.0/24) with port forwarding
@@ -16,7 +16,7 @@ This document explains the migration from Docker-based to VM-based architecture 
 
 3. **Service Deployment**
    - **Before:** Docker Compose orchestration
-   - **After:** Native systemd services on each VM
+  - **After:** Docker Compose on the Green Team VM, plus separate Attacker/Blue Team VMs
 
 4. **Access Methods**
    - **Before:** SSH to game-server, then access container on port 2224
@@ -59,22 +59,22 @@ provisioning/
 provisioning/
   playbook.yml              # Main playbook (calls all roles)
   roles/
-    blueteam/
-      tasks/main.yml        # PV controller + MQTT setup
-      handlers/main.yml     # Service restart handlers
+    green-team/
+      tasks/main.yml        # Docker + Compose deployment of PV stack
+      handlers/main.yml
     attacker/
       tasks/main.yml        # Attacker tools installation
       handlers/main.yml     # SSH restart handler
-    admin-dashboard/
-      tasks/main.yml        # Dashboard + Nginx setup
-      handlers/main.yml     # Nginx restart handler
+    blue-team/
+      tasks/main.yml        # ntopng + redis setup
+      handlers/main.yml
   files/
     smart-home-pv/          # Application source (still present)
 ```
 
 ## Component Mapping
 
-### PV Controller Container → Blue Team VM
+### PV Controller Container → Green Team VM
 
 **Old (Docker):**
 ```yaml
@@ -95,14 +95,14 @@ services:
 ```yaml
 # topology.yml
 hosts:
-  - name: blueteam
+  - name: green-team
     base_box:
       image: debian-12-x86_64
     flavor: standard.small
     ip: 10.10.10.10
 
-# Deployed as systemd service
-/etc/systemd/system/pv-controller.service
+# Deployed as Docker Compose stack
+/opt/smart-home-pv/docker-compose.yml
 ```
 
 ### Attacker Container → Attacker VM
@@ -133,7 +133,7 @@ hosts:
 # Direct network access to other VMs
 ```
 
-### Mosquitto Container → Blue Team VM Service
+### Mosquitto Container → Green Team VM (container)
 
 **Old (Docker):**
 ```yaml
@@ -149,14 +149,7 @@ services:
 ```
 
 **New (VM):**
-```bash
-# Installed via apt on blueteam VM
-apt install mosquitto mosquitto-clients
-
-# Configured via systemd
-systemctl enable mosquitto
-systemctl start mosquitto
-```
+- Still runs as the `mosquitto` container inside the Green Team VM's Docker/Compose stack.
 
 ## Network Translation
 
@@ -168,14 +161,14 @@ systemctl start mosquitto
 | MQTT Broker | 172.20.0.66 | 10.10.10.10 (same VM) |
 | Attacker | 172.20.0.70 | 10.10.10.20 |
 | Victim | 172.20.0.72 | 10.10.10.10 (same VM) |
-| Admin Dashboard | N/A (port 8081) | 10.10.10.30 |
+| Monitoring (ntopng) | N/A | 10.10.10.30 |
 
 ### Port Mapping
 
 | Service | Docker | VM |
 |---------|--------|-----|
 | PV Controller Web | game-server:8081 | 10.10.10.10:80 |
-| Admin Dashboard | game-server:8081 | 10.10.10.30:80 |
+| ntopng | N/A | 10.10.10.30:3000 |
 | MQTT WebSocket | game-server:9001 | 10.10.10.10:9001 |
 | Modbus TCP | game-server:15002 | 10.10.10.10:15002 |
 | Attacker SSH | game-server:2224 | 10.10.10.20:22 |
@@ -212,8 +205,8 @@ Admin Dashboard:   http://<game-server-ip>:8081 (same interface)
 
 **New URLs:**
 ```
-PV Controller:     http://10.10.10.10
-Admin Dashboard:   http://10.10.10.30
+PV Controller:     http://10.10.10.10/
+ntopng:            http://10.10.10.30:3000/
 ```
 
 ## Service Management Changes
@@ -235,16 +228,16 @@ docker logs scl-challenge-smart-home-pv
 
 **New (VM):**
 ```bash
-# On blueteam VM
-systemctl start pv-controller
-systemctl start mosquitto
-systemctl start victim-simulator
+# On green-team VM
+ssh debian@10.10.10.10
+cd /opt/smart-home-pv
+docker compose up -d --build
 
 # Check status
-systemctl status pv-controller
+docker compose ps
 
 # View logs
-journalctl -u pv-controller -f
+docker compose logs -f --tail=200
 ```
 
 ### Troubleshooting
@@ -263,15 +256,15 @@ docker network inspect playground-net
 
 **New (VM):**
 ```bash
-# Services are native - no need to "enter"
-# Just SSH to the VM
+# Green Team troubleshooting
+ssh debian@10.10.10.10
+cd /opt/smart-home-pv
+docker compose restart
 
-# Restart service
-systemctl restart pv-controller
-
-# View network
-ip addr show
-ip route show
+# Blue Team troubleshooting (ntopng)
+ssh debian@10.10.10.30
+sudo systemctl restart ntopng
+sudo journalctl -u ntopng -n 100 --no-pager
 ```
 
 ## Attack Script Updates
@@ -302,54 +295,34 @@ mosquitto_sub -h mosquitto -t 'pv/#'
 mosquitto_sub -h 10.10.10.10 -t 'pv/#'
 ```
 
-## Admin Dashboard Configuration
+## Monitoring (Blue Team)
 
-The dashboard now needs to connect to a different backend:
+The Blue Team VM provides network monitoring via ntopng:
 
-**Old (.env):**
-```
-VITE_PV_CONTROLLER_URL=http://pv-controller
-VITE_MQTT_BROKER_URL=ws://mosquitto:9001
-```
-
-**New (.env):**
-```
-VITE_PV_CONTROLLER_URL=http://10.10.10.10
-VITE_MQTT_BROKER_URL=ws://10.10.10.10:9001
-```
-
-This is automatically configured during provisioning.
+- URL: `http://10.10.10.30:3000/`
+- Redis is required and is started by the provisioning role.
 
 ## Removed Components
 
-The following Docker-specific components are no longer used:
+The following is no longer used:
 
-1. **docker-compose.yml** - Replaced by Ansible roles
-2. **Dockerfile** - Services installed natively via apt/npm
-3. **tools/attacker/Dockerfile** - Attacker VM provisioned by Ansible
-4. **tools/victim/Dockerfile** - Victim runs natively as systemd service
-5. **tools/noise/Dockerfile** - Noise generator integrated into PV controller
-6. **tools/replayer/Dockerfile** - Replayer integrated into PV controller
-
-Note: These files are still present in the repository for reference but are not used during VM provisioning.
+1. **Attacker container** - replaced by a dedicated Attacker VM
 
 ## Testing the Migration
 
-### Verify Blue Team VM
+### Verify Green Team VM
 
 ```bash
 ssh debian@10.10.10.10
 
-# Check services
-systemctl status pv-controller
-systemctl status mosquitto
-systemctl status victim-simulator
+cd /opt/smart-home-pv
+docker compose ps
 
-# Test API
-curl http://localhost/api/health
+# Test web UI
+curl -i http://localhost/
 
-# Test Modbus
-python3 -c "from pymodbus.client import ModbusTcpClient; c = ModbusTcpClient('localhost', 15002); print(c.connect())"
+# Test Modbus (host port forwarded to container)
+python3 -c "from pymodbus.client import ModbusTcpClient; c = ModbusTcpClient('127.0.0.1', 15002); print(c.connect())"
 ```
 
 ### Verify Attacker VM
@@ -366,16 +339,14 @@ nc -zv 10.10.10.10 80
 nmap -sV 10.10.10.10
 ```
 
-### Verify Admin Dashboard VM
+### Verify Blue Team VM
 
 ```bash
-# From browser
-curl http://10.10.10.30
+curl -i http://10.10.10.30:3000/
 
-# From admin VM
-ssh ubuntu@10.10.10.30
-systemctl status nginx
-ls -la /opt/admin-dashboard/dist/
+ssh debian@10.10.10.30
+sudo systemctl status ntopng
+sudo systemctl status redis-server
 ```
 
 ## Performance Considerations
