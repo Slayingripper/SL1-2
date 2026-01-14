@@ -9,10 +9,9 @@ hosts:
 
   - name: attacker
     base_box:
-      # Set this to a Kali image name available in your CyberRangeCZ platform.
-      # Example (if supported): kali-2024-x86_64
-      image: "{{ attacker_base_image }}"
-      mgmt_user: attacker
+      # Debian base-box; Kali toolset is installed during provisioning.
+      image: debian-12-x86_64
+      mgmt_user: debian
       mgmt_protocol: ssh
     flavor: standard.small
 

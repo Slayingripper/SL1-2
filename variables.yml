@@ -38,10 +38,5 @@ attacker_password:
 blue_team_password:
   value: "cyberrange123"
 
-# Base image selector for the attacker VM.
-# If your CyberRangeCZ platform provides a Kali base box, set this value accordingly.
-attacker_base_image:
-  value: "debian-12-x86_64"
-
 router_password:
   value: "cyberrange123"

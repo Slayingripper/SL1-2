@@ -6,15 +6,32 @@
 - name: Install attacker tools
   apt:
     name:
+      - ca-certificates
       - nmap
+      - arp-scan
+      - dnsutils
+      - whois
+      - traceroute
       - hydra
       - nikto
       - netcat-traditional
       - tcpdump
+      - hping3
+      - sqlmap
+      - john
+      - git
       - python3
       - python3-pip
+      - python3-venv
       - openssh-server
       - net-tools
+      - iproute2
+      - curl
+      - wget
+      - jq
+      - vim
+      - less
+      - mosquitto-clients
       - dsniff
       - ettercap-text-only
       - arpspoof
