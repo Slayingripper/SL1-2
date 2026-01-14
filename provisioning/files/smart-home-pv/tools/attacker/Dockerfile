@@ -53,10 +53,9 @@ COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 # Setup SSH and User Access (mimicking cyberrangecz/ansible-role-user-access)
-RUN mkdir -p /var/run/sshd && echo 'test:password' | chpasswd
-
-# Create test user with proper home directory
-RUN useradd -m -s /bin/bash test 2>/dev/null || true && echo 'test:password' | chpasswd
+RUN mkdir -p /var/run/sshd \
+ && useradd -m -s /bin/bash test 2>/dev/null || true \
+ && echo 'test:password' | chpasswd
 
 # Configure SSH authentication and X11 Forwarding
 RUN mkdir -p /etc/ssh/sshd_config.d && \
