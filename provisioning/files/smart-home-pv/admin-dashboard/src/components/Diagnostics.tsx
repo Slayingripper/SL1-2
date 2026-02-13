@@ -43,8 +43,8 @@ const Diagnostics: React.FC<DiagnosticsProps> = ({ token, systemStatus }) => {
     fetchFlag();
     fetchLogs();
 
-    // Refresh logs every 10 seconds
-    const interval = setInterval(fetchLogs, 10000);
+    // Refresh logs every 20 seconds to reduce polling overhead
+    const interval = setInterval(fetchLogs, 20000);
     return () => clearInterval(interval);
   }, [token]);
 

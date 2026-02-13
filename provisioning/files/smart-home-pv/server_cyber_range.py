@@ -45,10 +45,59 @@ except Exception:
     HAS_PAHO = False
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, os.getenv('LOG_LEVEL', 'WARNING').upper(), logging.WARNING),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+DOCUMENTS_DIR = os.getenv('DOCUMENTS_DIR', '/opt/pv-controller/Documents')
+ACTION_LOGS_DIR = os.path.join(DOCUMENTS_DIR, 'actions')
+TICKETS_DIR = os.path.join(DOCUMENTS_DIR, 'tickets')
+
+
+def _safe_name(value, fallback='item'):
+    text = str(value or fallback).strip().lower()
+    text = re.sub(r'[^a-z0-9._-]+', '_', text)
+    return text[:80] or fallback
+
+
+def ensure_documents_dirs():
+    os.makedirs(ACTION_LOGS_DIR, exist_ok=True)
+    os.makedirs(TICKETS_DIR, exist_ok=True)
+
+
+def write_action_log(action, actor='unknown', details=None):
+    ensure_documents_dirs()
+    now = datetime.now()
+    payload = {
+        'timestamp': now.isoformat(),
+        'action': action,
+        'actor': actor,
+        'ip': request.remote_addr if request else None,
+        'method': request.method if request else None,
+        'path': request.path if request else None,
+        'details': details or {}
+    }
+    filename = f"action_{now.strftime('%Y%m%d_%H%M%S_%f')}_{_safe_name(action)}.json"
+    path = os.path.join(ACTION_LOGS_DIR, filename)
+    with open(path, 'w') as fh:
+        json.dump(payload, fh, indent=2)
+    return path
+
+
+def write_ticket_text(ticket_type, title, body_lines):
+    ensure_documents_dirs()
+    now = datetime.now()
+    filename = f"{_safe_name(ticket_type)}_{now.strftime('%Y%m%d_%H%M%S_%f')}_{_safe_name(title, 'ticket')}.txt"
+    path = os.path.join(TICKETS_DIR, filename)
+    with open(path, 'w') as fh:
+        fh.write(f"Ticket Type: {ticket_type}\n")
+        fh.write(f"Title: {title}\n")
+        fh.write(f"Created At: {now.isoformat()}\n")
+        fh.write("\n")
+        for line in body_lines:
+            fh.write(f"{line}\n")
+    return path
 
 app = Flask(__name__, static_folder='static', static_url_path='/static')
 CORS(app)  # Enable CORS for React frontend
@@ -228,7 +277,7 @@ class ChallengeState:
             # Ensure logs directory exists
             os.makedirs(os.path.dirname(self.security_events_file), exist_ok=True)
             with open(self.security_events_file, 'w') as fh:
-                json.dump(self.security_events, fh, indent=2)
+                json.dump(self.security_events, fh, separators=(',', ':'))
         except Exception:
             raise
 
@@ -287,7 +336,7 @@ class ChallengeState:
         try:
             os.makedirs(os.path.dirname(self.failed_logins_file), exist_ok=True)
             with open(self.failed_logins_file, 'w') as fh:
-                json.dump(self.failed_logins, fh, indent=2)
+                json.dump(self.failed_logins, fh, separators=(',', ':'))
         except Exception:
             raise
 
@@ -309,7 +358,7 @@ class ChallengeState:
         try:
             os.makedirs(os.path.dirname(self.blocked_ips_file), exist_ok=True)
             with open(self.blocked_ips_file, 'w') as fh:
-                json.dump(self.blocked_ips, fh, indent=2)
+                json.dump(self.blocked_ips, fh, separators=(',', ':'))
         except Exception:
             raise
 
@@ -331,7 +380,7 @@ class ChallengeState:
         try:
             os.makedirs(os.path.dirname(self.anomalous_data_file), exist_ok=True)
             with open(self.anomalous_data_file, 'w') as fh:
-                json.dump(self.anomalous_data, fh, indent=2)
+                json.dump(self.anomalous_data, fh, separators=(',', ':'))
         except Exception:
             raise
 
@@ -377,11 +426,17 @@ pv_status = {
     "last_update": time.time()
 }
 
+# Compatibility state for legacy helper tooling
+replayer_state = {'running': False, 'last_played': None}
+mqtt_series = []
+
 # JWT-like tokens with expiration
 active_tokens = {}  # token -> {username, expires, type}
 
 # MQTT session token (changes periodically, visible only in network traffic)
 MQTT_SESSION_TOKEN = f"mqtt-session-{secrets.token_hex(8)}"
+MQTT_TELEMETRY_INTERVAL = max(1.0, float(os.getenv('MQTT_TELEMETRY_INTERVAL', '3')))
+MQTT_STATUS_INTERVAL = max(10, int(os.getenv('MQTT_STATUS_INTERVAL', '30')))
 
 def generate_token(username, token_type='api', expires_in=1800, ip_address=None):
     """Generate token with expiration (30 min default)"""
@@ -732,6 +787,8 @@ def publish_mqtt_status():
 
 def mqtt_telemetry_thread():
     """Publish telemetry data periodically"""
+    global mqtt_series
+    last_status_publish = 0.0
     while True:
         try:
             if mqtt_client and mqtt_client.is_connected():
@@ -742,15 +799,24 @@ def mqtt_telemetry_thread():
                     'timestamp': time.time()
                 }
                 mqtt_client.publish('pv/telemetry', json.dumps(telemetry), qos=0)
+                mqtt_series.append({
+                    'ts': telemetry['timestamp'],
+                    'value': telemetry['power_kw'],
+                    'power': telemetry['power_kw']
+                })
+                if len(mqtt_series) > 1000:
+                    mqtt_series = mqtt_series[-1000:]
                 
                 # Occasionally publish status (with session token)
-                if int(time.time()) % 30 == 0:
+                now = time.time()
+                if now - last_status_publish >= MQTT_STATUS_INTERVAL:
                     publish_mqtt_status()
+                    last_status_publish = now
             
-            time.sleep(2)
+            time.sleep(MQTT_TELEMETRY_INTERVAL)
         except Exception as e:
             logger.error(f"Telemetry error: {e}")
-            time.sleep(5)
+            time.sleep(max(2.0, MQTT_TELEMETRY_INTERVAL))
 
 if HAS_PAHO:
     try:
@@ -1061,6 +1127,10 @@ def admin_login():
     
     # Check if area is blocked for this IP
     if state.is_blocked(client_ip):
+        try:
+            write_action_log('admin_login_blocked', actor=username or 'unknown', details={'ip': client_ip})
+        except Exception:
+            logger.exception('Failed to write action log for blocked login')
         logger.warning(f"Blocked IP {client_ip} attempted login")
         state.add_security_event('medium', 'Authentication', 'Blocked IP attempted admin login', f'IP: {client_ip}', 'Authentication Service', ip=client_ip)
         return jsonify({"error": "Access denied"}), 403
@@ -1068,6 +1138,10 @@ def admin_login():
     # Check credentials
     if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
         token = generate_token(username, 'admin', expires_in=1800, ip_address=client_ip)
+        try:
+            write_action_log('admin_login_success', actor=username, details={'ip': client_ip})
+        except Exception:
+            logger.exception('Failed to write action log for successful login')
         
         state.mark_event('admin_authenticated', {'username': username})
         state.add_security_event(
@@ -1087,6 +1161,10 @@ def admin_login():
         })
     
     # Track failed login
+    try:
+        write_action_log('admin_login_failed', actor=username or 'unknown', details={'ip': client_ip})
+    except Exception:
+        logger.exception('Failed to write action log for failed login')
     state.add_failed_login(username, client_ip)
     logger.warning(f"Failed admin login attempt: {username} from {client_ip}")
     return jsonify({"error": "Invalid credentials"}), 401
@@ -1222,6 +1300,93 @@ def api_status():
         "uptime": int(time.time() - state.timestamps.get('network_scanned', time.time())),
         "mqtt_connected": mqtt_client.is_connected() if mqtt_client else False
     })
+
+
+@app.route("/status")
+def status_compat():
+    """Legacy status endpoint compatibility."""
+    return jsonify({
+        "status": pv_status['status'],
+        "power": int(pv_status.get('power_kw', 0) * 1000),
+        "power_kw": pv_status['power_kw'],
+        "voltage_v": pv_status['voltage_v'],
+        "current_a": pv_status['current_a'],
+        "mqtt_session": MQTT_SESSION_TOKEN,
+        "last_update": pv_status['last_update']
+    })
+
+
+@app.route('/api/admin/devices', methods=['GET', 'POST'])
+def admin_devices_compat():
+    """Legacy devices endpoint compatibility for noise and XSS training flows."""
+    conn = sqlite3.connect('challenge_admin.db')
+    cur = conn.cursor()
+    try:
+        if request.method == 'GET':
+            cur.execute('SELECT id, name, type, status, ip_address FROM devices ORDER BY id DESC LIMIT 200')
+            rows = cur.fetchall()
+            devices = [{
+                'id': r[0],
+                'name': r[1],
+                'description': f"{r[2]} | {r[3]} | {r[4]}",
+                'type': r[2],
+                'status': r[3],
+                'ip_address': r[4]
+            } for r in rows]
+            return jsonify({'devices': devices})
+
+        data = request.json or {}
+        name = data.get('name') or 'device'
+        description = data.get('description') or ''
+        try:
+            write_action_log('admin_device_created', actor='dashboard_user', details={'name': name, 'description': description})
+        except Exception:
+            logger.exception('Failed to write action log for device creation')
+        cur.execute(
+            'INSERT INTO devices (name, type, status, ip_address) VALUES (?, ?, ?, ?)',
+            (name, description[:64] or 'unknown', 'online', '172.20.0.99')
+        )
+        conn.commit()
+        return jsonify({'result': 'ok'})
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.route('/admin/mqtt_data', methods=['GET'])
+def admin_mqtt_data_compat():
+    """Legacy admin mqtt data endpoint."""
+    return jsonify(mqtt_series[-200:])
+
+
+@app.route('/replayer/state', methods=['GET', 'POST'])
+def replayer_state_compat():
+    """Legacy replayer endpoint used by replayer sidecar."""
+    if request.method == 'POST':
+        replayer_state['last_played'] = time.time()
+        return jsonify({'result': 'ok'})
+    return jsonify({'running': replayer_state['running'], 'last_played': replayer_state['last_played']})
+
+
+@app.route('/victim/log', methods=['POST'])
+def victim_log_compat():
+    """Legacy victim telemetry endpoint compatibility."""
+    data = request.json or {}
+    msg = data.get('msg') or data.get('message') or data.get('log')
+    if not msg:
+        return jsonify({'error': 'missing msg'}), 400
+    try:
+        with open('/opt/pv-controller/logs/victim.log', 'a') as fh:
+            fh.write(f"{datetime.now().isoformat()} {msg}\n")
+    except Exception:
+        pass
+    return jsonify({'result': 'ok'})
+
+
+@app.route('/vite.svg')
+def vite_svg_compat():
+    """Silence missing favicon requests from Vite-built dashboard."""
+    return ('', 204)
 
 @app.route("/api/admin/logs/<log_type>")
 def get_admin_logs(log_type):
@@ -1479,6 +1644,10 @@ def get_container_info():
 @app.route("/api/notifications/<int:notification_id>/read", methods=["POST"])
 def mark_notification_read(notification_id):
     """Mark a notification as read"""
+    try:
+        write_action_log('notification_marked_read', actor='dashboard_user', details={'notification_id': notification_id})
+    except Exception:
+        logger.exception('Failed to write action log for notification read')
     with state.lock:
         for notif in state.notifications:
             if notif.get('id') == notification_id:
@@ -1496,6 +1665,10 @@ def clear_security_events():
         return jsonify({"error": "Invalid or expired token"}), 403
     
     count = len(state.security_events)
+    try:
+        write_action_log('security_events_cleared', actor=token_data.get('username', 'admin'), details={'cleared_events': count})
+    except Exception:
+        logger.exception('Failed to write action log for clear events')
     state.security_events = []
     state.failed_logins = []
     state.anomalous_data = []
@@ -1539,6 +1712,10 @@ def block_ip_endpoint():
     state.block_ip(ip, blocked_by=token_data.get('username', 'admin'), reason=reason)
     # Revoke active tokens for that IP
     revoked = revoke_tokens_for_ip(ip)
+    try:
+        write_action_log('ip_blocked', actor=token_data.get('username', 'admin'), details={'ip': ip, 'reason': reason, 'revoked_sessions': revoked})
+    except Exception:
+        logger.exception('Failed to write action log for block ip')
 
     state.add_security_event('medium', 'Incident Response', f'Blocked IP {ip} and revoked {revoked} sessions', f'Reason: {reason}', 'Incident Response', ip=ip)
     return jsonify({'success': True, 'ip': ip, 'revoked_sessions': revoked})
@@ -1557,6 +1734,10 @@ def unblock_ip_endpoint():
         return jsonify({'error': 'Missing ip field'}), 400
 
     state.unblock_ip(ip)
+    try:
+        write_action_log('ip_unblocked', actor=token_data.get('username', 'admin'), details={'ip': ip})
+    except Exception:
+        logger.exception('Failed to write action log for unblock ip')
     state.add_security_event('low', 'Incident Response', f'Unblocked IP {ip}', '', 'Incident Response', ip=ip)
     return jsonify({'success': True, 'ip': ip})
 
@@ -1584,6 +1765,10 @@ def disconnect_ip_endpoint():
         return jsonify({'error': 'Missing ip field'}), 400
 
     revoked = revoke_tokens_for_ip(ip)
+    try:
+        write_action_log('ip_disconnected', actor=token_data.get('username', 'admin'), details={'ip': ip, 'revoked_sessions': revoked})
+    except Exception:
+        logger.exception('Failed to write action log for disconnect ip')
     state.add_security_event('medium', 'Incident Response', f'Disconnected IP {ip} (revoked {revoked} sessions)', '', 'Incident Response', ip=ip)
     return jsonify({'success': True, 'ip': ip, 'revoked_sessions': revoked})
 
@@ -1608,8 +1793,28 @@ def acknowledge_alert():
             event['acknowledged_by'] = analyst
             event['acknowledged_at'] = datetime.now().isoformat()
             event['notes'] = notes
+            title = event.get('title') or event.get('message') or 'Security Alert'
+            try:
+                ticket_path = write_ticket_text(
+                    'acknowledgement_ticket',
+                    title,
+                    [
+                        f"Analyst: {analyst}",
+                        f"Event Timestamp: {event_timestamp}",
+                        f"Severity: {event.get('severity', 'unknown')}",
+                        f"Category: {event.get('category', 'unknown')}",
+                        f"Source: {event.get('source', 'unknown')}",
+                        f"IP: {event.get('ip', '')}",
+                        "",
+                        "Notes:",
+                        notes or '(none)'
+                    ]
+                )
+                write_action_log('alert_acknowledged', actor=analyst, details={'event_timestamp': event_timestamp, 'ticket_file': ticket_path})
+            except Exception:
+                logger.exception('Failed to write ticket/action logs for acknowledgement')
             
-            logger.info(f"✅ Alert acknowledged by {analyst}: {event['title']}")
+            logger.info(f"✅ Alert acknowledged by {analyst}: {title}")
             return jsonify({'success': True, 'event': event})
     
     return jsonify({'error': 'Event not found'}), 404
@@ -1648,6 +1853,24 @@ def create_security_event():
     }
     # Use add_security_event so events get saved to disk
     state.add_security_event(severity, category, title, details, source, ip)
+    try:
+        ticket_path = write_ticket_text(
+            'security_ticket',
+            title,
+            [
+                f"Submitted By: {token_data.get('username', 'admin')}",
+                f"Severity: {severity}",
+                f"Category: {category}",
+                f"Source: {source}",
+                f"IP: {ip or ''}",
+                "",
+                "Details:",
+                details or '(none)'
+            ]
+        )
+        write_action_log('security_ticket_submitted', actor=token_data.get('username', 'admin'), details={'title': title, 'severity': severity, 'ticket_file': ticket_path})
+    except Exception:
+        logger.exception('Failed to write ticket/action logs for created security event')
     
     logger.info(f"New security event created by {token_data.get('username', 'admin')}: {title}")
     # Return last appended event
@@ -1710,6 +1933,7 @@ if __name__ == "__main__":
     
     # Create logs directory
     os.makedirs('/opt/pv-controller/logs', exist_ok=True)
+    ensure_documents_dirs()
     
     logger.info("=" * 60)
     logger.info("Smart Home PV Controller - CYBER RANGE MODE")

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import './NotificationPopup.css';
 
 interface Notification {
@@ -15,9 +15,14 @@ interface Notification {
 const NotificationPopup = () => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [shownNotifications, setShownNotifications] = useState<Set<number>>(new Set());
+  const shownNotificationsRef = useRef<Set<number>>(new Set());
 
   useEffect(() => {
-    // Poll for notifications every 3 seconds
+    shownNotificationsRef.current = shownNotifications;
+  }, [shownNotifications]);
+
+  useEffect(() => {
+    // Poll for notifications every 8 seconds
     const checkNotifications = async () => {
       try {
         const response = await fetch('/api/notifications');
@@ -28,9 +33,14 @@ const NotificationPopup = () => {
         
         // Show new unread notifications
         unreadNotifs.forEach((notif: Notification) => {
-          if (!shownNotifications.has(notif.id)) {
+          if (!shownNotificationsRef.current.has(notif.id)) {
             setNotifications(prev => [...prev, notif]);
-            setShownNotifications(prev => new Set(prev).add(notif.id));
+            setShownNotifications(prev => {
+              const next = new Set(prev);
+              next.add(notif.id);
+              shownNotificationsRef.current = next;
+              return next;
+            });
             
             // Auto-dismiss after 30 seconds
             setTimeout(() => {
@@ -44,10 +54,10 @@ const NotificationPopup = () => {
     };
 
     checkNotifications();
-    const interval = setInterval(checkNotifications, 3000);
+    const interval = setInterval(checkNotifications, 8000);
 
     return () => clearInterval(interval);
-  }, [shownNotifications]);
+  }, []);
 
   const closeNotification = async (id: number) => {
     setNotifications(prev => prev.filter(n => n.id !== id));
