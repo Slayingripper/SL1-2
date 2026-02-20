@@ -93,7 +93,18 @@ def main(argv: list[str]) -> int:
         return 1
 
     print("Connection established")
-    rr = client.write_coil(coil_addr, coil_value, slave=unit)
+    # Try different ways to pass the unit ID, handling different pymodbus versions
+    try:
+        rr = client.write_coil(coil_addr, coil_value, slave=unit)
+    except TypeError:
+        try:
+             rr = client.write_coil(coil_addr, coil_value, unit=unit)
+        except TypeError:
+             # Fallback: maybe it's just positional? or no kwarg?
+             # Some old versions don't take unit here at all?
+             # But Modbus TCP usually needs a unit if it's bridging. Defaults to 1 or 0.
+             print("Warning: Could not pass unit/slave ID as kwarg. Trying without...")
+             rr = client.write_coil(coil_addr, coil_value)
 
     print("\n=== Response ===")
     print(f"Response: {rr}")
