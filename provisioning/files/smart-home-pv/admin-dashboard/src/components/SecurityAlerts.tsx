@@ -159,7 +159,7 @@ const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData })
     };
 
     fetchSecurityEvents();
-    const interval = setInterval(fetchSecurityEvents, 3000); // Poll every 3 seconds
+    const interval = setInterval(fetchSecurityEvents, 8000); // Poll every 8 seconds
     return () => clearInterval(interval);
   }, [token]);
 
@@ -174,7 +174,7 @@ const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData })
       }
     };
     fetchBlocked();
-    const bi = setInterval(fetchBlocked, 10000);
+    const bi = setInterval(fetchBlocked, 20000);
     return () => clearInterval(bi);
   }, [token]);
 

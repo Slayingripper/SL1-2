@@ -12,15 +12,11 @@ This cyber range uses a **VM-based architecture** with three separate virtual ma
 
 ## Structure
 
-- `training.json`: Defines the training levels, flags, and content
-- `topology.yml`: Defines the sandbox topology (3 VMs + router)
-- `provisioning/playbook.yml`: Main Ansible playbook orchestrating all roles
-- `provisioning/roles/`: Ansible roles for each VM:
-  - `green-team/`: Runs the Dockerized Smart Home PV stack
-  - `attacker/`: Provisions penetration testing tools
-  - `blue-team/`: Installs and configures ntopng
-- `provisioning/files/smart-home-pv/`: The challenge source code
-- `variables.yml`: APG variables for flags and passwords
+- `training.json`: Defines the training levels, flags, and content.
+- `topology.yml`: Defines the sandbox topology (one game server).
+- `provisioning/playbook.yml`: Ansible playbook to install Docker and deploy the challenge.
+- `provisioning/files/smart-home-pv/`: The challenge source code and Docker Compose configuration.
+- `variables.yml`: APG variables.
 
 ## Deployment
 
@@ -61,11 +57,9 @@ This repository's provisioning enforces the intended passwords on the VMs based 
 SSH into the attacker VM:
 
 ```bash
-ssh attacker@<attacker-vm-ip>
-# Or from within the network:
-ssh attacker@10.10.10.20
+ssh -p 2224 test@<game-server-ip>
 ```
-Password: `attacker`
+Password: `password`
 
 Available tools in `/home/attacker/tools/`:
 - `attacker_modbus.py`: Modbus attack scripts

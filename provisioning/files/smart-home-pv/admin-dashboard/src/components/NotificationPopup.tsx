@@ -15,9 +15,14 @@ interface Notification {
 const NotificationPopup = () => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [shownNotifications, setShownNotifications] = useState<Set<number>>(new Set());
+  const shownNotificationsRef = useRef<Set<number>>(new Set());
 
   useEffect(() => {
-    // Poll for notifications every 3 seconds
+    shownNotificationsRef.current = shownNotifications;
+  }, [shownNotifications]);
+
+  useEffect(() => {
+    // Poll for notifications every 8 seconds
     const checkNotifications = async () => {
       try {
         const response = await fetch('/api/notifications');
@@ -31,8 +36,19 @@ const NotificationPopup = () => {
         const idsToShow = new Set<number>();
         
         unreadNotifs.forEach((notif: Notification) => {
-          if (!shownIds.has(notif.id)) {
-            idsToShow.add(notif.id);
+          if (!shownNotificationsRef.current.has(notif.id)) {
+            setNotifications(prev => [...prev, notif]);
+            setShownNotifications(prev => {
+              const next = new Set(prev);
+              next.add(notif.id);
+              shownNotificationsRef.current = next;
+              return next;
+            });
+            
+            // Auto-dismiss after 30 seconds
+            setTimeout(() => {
+              closeNotification(notif.id);
+            }, 30000);
           }
         });
 
@@ -64,17 +80,11 @@ const NotificationPopup = () => {
       }
     };
 
-    checkNotifications(); // Initial fetch
-    const interval = setInterval(checkNotifications, 3000);
+    checkNotifications();
+    const interval = setInterval(checkNotifications, 8000);
 
     return () => clearInterval(interval);
-  }, []); // Run ONCE on mount
-
-  // Sync state to ref for effect to use fresh values without re-running
-  const shownIdsRef = useRef(new Set<number>());
-  useEffect(() => {
-    shownIdsRef.current = shownNotifications;
-  }, [shownNotifications]);
+  }, []);
 
   const closeNotification = async (id: number) => {
     setNotifications(prev => prev.filter(n => n.id !== id));

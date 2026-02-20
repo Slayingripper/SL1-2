@@ -6,6 +6,8 @@ const PV_URL = process.env['PV_URL'] || 'http://pv-controller';
 const CHECK_EMAIL_INTERVAL = parseInt(process.env['CHECK_EMAIL_INTERVAL'] || '30') * 1000;
 const VICTIM_EMAIL = process.env['VICTIM_EMAIL'] || 'admin@pv-controller.local';
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * REALISTIC VICTIM SIMULATION
  * 
@@ -353,7 +355,7 @@ class RealisticVictim {
             console.log('[Victim] Entered password');
             
             // Wait a bit (realistic user behavior)
-            await this.page.waitForTimeout(1000);
+            await sleep(1000);
             
             // Submit form
             const submitButton = await this.page.$('button[type="submit"], input[type="submit"], button');
@@ -362,7 +364,7 @@ class RealisticVictim {
                 console.log('[Victim] 🚨 CREDENTIALS SUBMITTED TO PHISHING PAGE');
                 
                 // Wait for response
-                await this.page.waitForTimeout(2000);
+                await sleep(2000);
                 
                 // Notify server that credentials were submitted
                 await fetch(`${PV_URL}/api/internal/phish_submitted`, {
@@ -396,7 +398,7 @@ class RealisticVictim {
             console.log('[Victim] Viewing admin dashboard');
             
             // Wait a bit (simulate reading)
-            await this.page.waitForTimeout(5000);
+            await sleep(5000);
             
         } catch (error) {
             console.error('[Victim] Error during routine work:', error.message);

@@ -59,8 +59,8 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
         } else if (topic === 'pv/telemetry') {
           setTelemetryData(prev => {
             const newData = [...prev, data];
-            // Keep last 50 data points
-            return newData.slice(-50);
+            // Keep last 30 data points to reduce browser memory footprint
+            return newData.slice(-30);
           });
         }
       } catch (error) {
@@ -73,10 +73,10 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
       setMqttConnected(false);
     });
 
-    // Update clock every second
+    // Update clock every 5 seconds to reduce unnecessary re-renders
     const clockInterval = setInterval(() => {
       setCurrentTime(new Date());
-    }, 1000);
+    }, 5000);
 
     return () => {
       client.end();

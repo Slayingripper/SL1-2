@@ -3,31 +3,14 @@ hosts:
   - name: green-team
     base_box:
       image: debian-12-x86_64
-      mgmt_user: debian
-      mgmt_protocol: ssh
-    flavor: standard.small
-
-  - name: attacker
-    base_box:
-      # Debian base-box; Kali toolset is installed during provisioning.
-      image: debian-12-x86_64
-      mgmt_user: debian
-      mgmt_protocol: ssh
-    flavor: standard.small
-
-  - name: blue-team
-    base_box:
-      image: debian-12-x86_64
-      mgmt_user: debian
-      mgmt_protocol: ssh
+      mgmt_user: test
     flavor: standard.small
 
 routers:
   - name: router
     base_box:
       image: debian-12-x86_64
-      mgmt_user: debian
-      mgmt_protocol: ssh
+      mgmt_user: test
     flavor: standard.small
 
 wan:

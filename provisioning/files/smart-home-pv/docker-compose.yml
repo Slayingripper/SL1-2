@@ -3,7 +3,7 @@ services:
     build: .
     image: scl-challenge-smart-home-pv
     container_name: scl-challenge-smart-home-pv
-    restart: on-failure
+    restart: unless-stopped
     networks:
       playground-net:
         ipv4_address: 172.20.0.65
@@ -14,8 +14,18 @@ services:
       - MQTT_HOST=mosquitto
       - MODBUS_PORT=15002
       - BLOCK_TTL_SECONDS=60
+      - LOG_LEVEL=WARNING
+      - MQTT_TELEMETRY_INTERVAL=3
+      - MQTT_STATUS_INTERVAL=30
+      - DOCUMENTS_DIR=/opt/pv-controller/Documents
     volumes:
       - ./logs:/opt/pv-controller/logs
+      - ${HOME}/Documents:/opt/pv-controller/Documents
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.connect(('127.0.0.1',80)); s.close()"]
       interval: 20s
@@ -25,7 +35,7 @@ services:
   mosquitto:
     image: eclipse-mosquitto:2.0
     container_name: scl-challenge-mosquitto
-    restart: on-failure
+    restart: unless-stopped
     networks:
       playground-net:
         ipv4_address: 172.20.0.66
@@ -34,6 +44,11 @@ services:
       - "9001:9001"  # WebSocket for React dashboard
     volumes:
       - ./mosquitto-config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     healthcheck:
       test: ["CMD", "sh", "-c", "mosquitto_sub -h 127.0.0.1 -t '$$SYS/#' -C 1 -W 1 || exit 1"]
       interval: 30s
@@ -45,7 +60,7 @@ services:
       context: ./tools/noise
     image: scl-challenge-smart-home-pv-noise
     container_name: scl-challenge-smart-home-pv-noise
-    restart: on-failure
+    restart: unless-stopped
     networks:
       playground-net:
         ipv4_address: 172.20.0.71
@@ -53,6 +68,11 @@ services:
       - MQTT_HOST=mosquitto
     volumes:
       - ./logs:/opt/pv-controller/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     depends_on:
       - mosquitto
       - pv-controller
@@ -61,20 +81,25 @@ services:
       context: ./tools/victim
     image: scl-challenge-smart-home-pv-victim
     container_name: scl-challenge-smart-home-pv-victim
-    restart: on-failure
+    restart: unless-stopped
     networks:
       playground-net:
         ipv4_address: 172.20.0.72
     environment:
-      PV_URL: http://pv-controller/admin
+      PV_URL: http://pv-controller
       PV_HOST: pv-controller
       PV_BASE_URL: http://pv-controller
     volumes:
       - ./logs:/opt/pv-controller/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     depends_on:
       - pv-controller
     tty: true
-    command: ["node", "victim_runner.js"]
+    command: ["node", "victim_cyber_range.js"]
   telemetry-seeder:
     build:
       context: ./tools/noise
@@ -88,13 +113,18 @@ services:
       - MQTT_HOST=mosquitto
     volumes:
       - ./logs:/opt/pv-controller/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     command: ["python","noise_generator.py","--seed"]
   replayer:
     build:
       context: ./tools/replayer
     image: scl-challenge-smart-home-pv-replayer
     container_name: scl-challenge-smart-home-pv-replayer
-    restart: on-failure
+    restart: unless-stopped
     networks:
       playground-net:
         ipv4_address: 172.20.0.74
@@ -106,6 +136,11 @@ services:
       - pv-controller
     volumes:
       - ./logs:/opt/pv-controller/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
 
 networks:
   playground-net:
