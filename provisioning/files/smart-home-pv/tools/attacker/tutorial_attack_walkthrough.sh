@@ -26,8 +26,14 @@ SUGGESTED_EXTERNAL_HOST="$(hostname -I 2>/dev/null | awk '{print $1}' | tr -d '\
 
 cd "${SCRIPT_DIR}"
 
-SESSION_LOG="${OUT_DIR}/session.log"
-COMMAND_LOG="${OUT_DIR}/commands.log"
+SESSION_LOG="${SCRIPT_DIR}/session.log"
+: > "${SESSION_LOG}"
+{
+  echo "[$(date -Is)] Smart Home PV tutorial session"
+  echo "[$(date -Is)] run_id=${RUN_ID}"
+  echo "[$(date -Is)] artifacts_dir=${OUT_DIR}"
+  echo
+} >> "${SESSION_LOG}"
 
 SUBNET="${SUBNET:-192.168.100.0/24}"
 TARGET_HINT="${TARGET_HINT:-192.168.100.87}"
@@ -126,7 +132,7 @@ run_cmd() {
   echo -e "${YELLOW}[*]${NC} ${WHITE}${description}${NC}"
   set +e
   {
-    echo "[$(date -Is)] $command" >> "${COMMAND_LOG}"
+    echo "[$(date -Is)] CMD: ${command}"
     eval "$command"
   } >>"${SESSION_LOG}" 2>&1
   local rc=$?
@@ -183,7 +189,7 @@ teach_cmd() {
 
   set +e
   {
-    echo "[$(date -Is)] $typed" >> "${COMMAND_LOG}"
+    echo "[$(date -Is)] CMD: ${typed}"
     eval "${typed}"
   } >>"${SESSION_LOG}" 2>&1
   local rc=$?
@@ -478,8 +484,7 @@ echo -e "${GRAY}- 04_challenge_status.json${NC}"
 echo -e "${GRAY}- wordlist.txt (if created)${NC}"
 echo -e "${GRAY}- 05_modbus_action.log${NC}"
 echo -e "${GRAY}- 06_mqtt_sample.txt (if captured)${NC}"
-echo -e "${GRAY}- session.log (full raw output, hidden during run)${NC}"
-echo -e "${GRAY}- commands.log (every executed command)${NC}"
+echo -e "${GRAY}- session.log (saved in this folder; includes commands + raw output)${NC}"
 
 echo
 echo -e "${MAGENTA}Walkthrough complete. Stay legal. Test only in authorized labs.${NC}"
