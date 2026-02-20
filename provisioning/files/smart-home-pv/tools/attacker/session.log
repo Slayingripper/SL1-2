@@ -1,7 +1,7 @@
-[2026-02-20T11:11:52+02:00] Smart Home PV tutorial session
-[2026-02-20T11:11:52+02:00] run_id=20260220_111152
-[2026-02-20T11:11:52+02:00] artifacts_dir=/home/mastros/gitstuff/SL1-2/provisioning/files/smart-home-pv/tools/attacker/tutorial_output_20260220_111152
+[2026-02-20T11:29:00+02:00] Smart Home PV tutorial session
+[2026-02-20T11:29:00+02:00] run_id=20260220_112900
+[2026-02-20T11:29:00+02:00] artifacts_dir=/home/mastros/gitstuff/SL1-2/provisioning/files/smart-home-pv/tools/attacker/tutorial_output_20260220_112900
 
-[2026-02-20T11:11:52+02:00] CMD: nmap -n -T4 -p 80,1883,15002 --open 192.168.100.0/24 -oG /home/mastros/gitstuff/SL1-2/provisioning/files/smart-home-pv/tools/attacker/tutorial_output_20260220_111152/01_recon.gnmap
-Starting Nmap 7.94SVN ( https://nmap.org ) at 2026-02-20 11:11 EET
-Nmap done: 256 IP addresses (0 hosts up) scanned in 52.12 seconds
+[2026-02-20T11:29:00+02:00] CMD: nmap -n -T4 -p 80,1883,15002 --open 192.168.100.0/24 -oG /home/mastros/gitstuff/SL1-2/provisioning/files/smart-home-pv/tools/attacker/tutorial_output_20260220_112900/01_recon.gnmap
+Starting Nmap 7.94SVN ( https://nmap.org ) at 2026-02-20 11:29 EET
+Nmap done: 256 IP addresses (0 hosts up) scanned in 51.57 seconds

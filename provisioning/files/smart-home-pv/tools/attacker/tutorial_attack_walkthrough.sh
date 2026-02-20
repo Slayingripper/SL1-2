@@ -22,18 +22,9 @@ RUN_ID="$(date +%Y%m%d_%H%M%S)"
 OUT_DIR="${SCRIPT_DIR}/tutorial_output_${RUN_ID}"
 mkdir -p "${OUT_DIR}"
 OUT_DIR_LABEL="$(basename "${OUT_DIR}")"
-SUGGESTED_EXTERNAL_HOST="$(hostname -I 2>/dev/null | awk '{print $1}' | tr -d '\n' || true)"
+SUGGESTED_EXTERNAL_HOST="$(hostname -I 2>/dev/null | cut -d' ' -f1 | tr -d '\n' || true)"
 
 cd "${SCRIPT_DIR}"
-
-SESSION_LOG="${SCRIPT_DIR}/session.log"
-: > "${SESSION_LOG}"
-{
-  echo "[$(date -Is)] Smart Home PV tutorial session"
-  echo "[$(date -Is)] run_id=${RUN_ID}"
-  echo "[$(date -Is)] artifacts_dir=${OUT_DIR}"
-  echo
-} >> "${SESSION_LOG}"
 
 SUBNET="${SUBNET:-192.168.100.0/24}"
 TARGET_HINT="${TARGET_HINT:-192.168.100.87}"
@@ -131,10 +122,7 @@ run_cmd() {
 
   echo -e "${YELLOW}[*]${NC} ${WHITE}${description}${NC}"
   set +e
-  {
-    echo "[$(date -Is)] CMD: ${command}"
-    eval "$command"
-  } >>"${SESSION_LOG}" 2>&1
+  eval "$command"
   local rc=$?
   set -e
 
@@ -188,10 +176,7 @@ teach_cmd() {
   done
 
   set +e
-  {
-    echo "[$(date -Is)] CMD: ${typed}"
-    eval "${typed}"
-  } >>"${SESSION_LOG}" 2>&1
+  eval "${exec_command}"
   local rc=$?
   set -e
 
@@ -202,7 +187,7 @@ teach_cmd() {
   fi
 }
 
-required_tools=(nmap curl python3 awk grep sed)
+required_tools=(nmap curl python3 grep sed cut)
 missing_tools=()
 for tool in "${required_tools[@]}"; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -254,7 +239,11 @@ teach_cmd \
 
 echo "# host,web,mqtt,modbus,score" > "${OUT_DIR}/02_scoring.csv"
 
-mapfile -t alive_hosts < <(awk '/Status: Up/{print $2}' "${OUT_DIR}/01_recon.gnmap" | sort -u)
+mapfile -t alive_hosts < <(
+  grep -E "Status: Up" "${OUT_DIR}/01_recon.gnmap" \
+    | sed -E 's/^Host: ([0-9.]+).*/\1/' \
+    | sort -u
+)
 
 if [[ ${#alive_hosts[@]} -eq 0 ]]; then
   echo -e "${RED}[!] No alive hosts discovered in ${SUBNET}.${NC}"
@@ -276,7 +265,7 @@ echo
 echo -e "${WHITE}Host scoring (higher = more likely PV target):${NC}"
 column -t -s, "${OUT_DIR}/02_scoring.csv" || cat "${OUT_DIR}/02_scoring.csv"
 
-best_host="$(sort -t, -k5,5nr "${OUT_DIR}/02_scoring.csv" | awk -F, 'NR==2{print $1}')"
+best_host="$(sort -t, -k5,5nr "${OUT_DIR}/02_scoring.csv" | sed -n '2{s/,.*//;p}')"
 
 if grep -q "^${TARGET_HINT}," "${OUT_DIR}/02_scoring.csv"; then
   target_host="${TARGET_HINT}"
@@ -408,7 +397,7 @@ explain "We do a single-message grab to keep this realistic and non-noisy."
 explain "  - timeout 8   = don’t hang forever waiting on a message"
 explain "  - -C 1        = exit after 1 message"
 
-mqtt_host="$(awk -F, '$3==1{print $1; exit}' "${OUT_DIR}/02_scoring.csv" || true)"
+mqtt_host="$(sed -n -E 's/^([^,]+),[^,]+,1,.*/\1/p' "${OUT_DIR}/02_scoring.csv" | sed -n '1p' || true)"
 if [[ -n "${mqtt_host}" ]]; then
   if command -v mosquitto_sub >/dev/null 2>&1; then
     teach_cmd \
@@ -484,7 +473,6 @@ echo -e "${GRAY}- 04_challenge_status.json${NC}"
 echo -e "${GRAY}- wordlist.txt (if created)${NC}"
 echo -e "${GRAY}- 05_modbus_action.log${NC}"
 echo -e "${GRAY}- 06_mqtt_sample.txt (if captured)${NC}"
-echo -e "${GRAY}- session.log (saved in this folder; includes commands + raw output)${NC}"
 
 echo
 echo -e "${MAGENTA}Walkthrough complete. Stay legal. Test only in authorized labs.${NC}"
