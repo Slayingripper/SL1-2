@@ -30,6 +30,7 @@ services:
       playground-net:
         ipv4_address: 172.20.0.66
     ports:
+      - "1883:1883"  # MQTT broker for external tools/clients on the network
       - "9001:9001"  # WebSocket for React dashboard
     volumes:
       - ./mosquitto-config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
