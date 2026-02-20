@@ -32,97 +32,83 @@
 
 - hosts: game-server
   become: yes
+  vars:
+    mgmt_user_by_host:
+      green-team: debian
+      attacker: attacker
+      blue-team: debian
+      router: debian
+    mgmt_pass_by_host:
+      green-team: "{{ green_team_password.value | default(green_team_password) }}"
+      attacker: "{{ attacker_password.value | default(attacker_password) }}"
+      blue-team: "{{ blue_team_password.value | default(blue_team_password) }}"
+      router: "{{ router_password.value | default(router_password) }}"
   tasks:
-    - name: Update apt cache
-      apt:
-        update_cache: yes
+    - name: Select management user and password
+      set_fact:
+        cr_mgmt_user: "{{ mgmt_user_by_host.get(inventory_hostname, 'debian') }}"
+        cr_mgmt_pass: "{{ mgmt_pass_by_host.get(inventory_hostname, (green_team_password.value | default(green_team_password))) }}"
 
-    - name: Install Docker and Docker Compose
-      apt:
-        name:
-          - docker.io
-          - docker-compose
+    - name: Ensure management user exists
+      user:
+        name: "{{ cr_mgmt_user }}"
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Ensure management user can sudo without password
+      copy:
+        dest: "/etc/sudoers.d/90-{{ cr_mgmt_user }}-nopasswd"
+        content: "{{ cr_mgmt_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        mode: '0440'
+
+    - name: Set management user password
+      command: chpasswd
+      args:
+        stdin: "{{ cr_mgmt_user }}:{{ cr_mgmt_pass }}"
+      no_log: true
+
+    - name: Ensure SSH password authentication is enabled (drop-in)
+      copy:
+        dest: /etc/ssh/sshd_config.d/99-cyberrange-password-auth.conf
+        content: |
+          PasswordAuthentication yes
+          KbdInteractiveAuthentication yes
+          UsePAM yes
+        mode: '0644'
+
+    - name: Ensure SSH password authentication is enabled (main config)
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication\\s+'
+        line: 'PasswordAuthentication yes'
         state: present
 
-    - name: Ensure Docker service is running
-      service:
-        name: docker
-        state: started
-        enabled: yes
+    - name: Restart SSH service
+      block:
+        - name: Restart ssh
+          service:
+            name: ssh
+            state: restarted
+      rescue:
+        - name: Restart sshd
+          service:
+            name: sshd
+            state: restarted
 
-    - name: Create local archive of challenge files
-      delegate_to: localhost
-      command: >
-        tar -czf /tmp/smart-home-pv.tar.gz
-        --exclude='node_modules'
-        --exclude='__pycache__'
-        --exclude='.git'
-        -C "{{ playbook_dir }}/files"
-        smart-home-pv
+# Green Team VM - Runs the Dockerized Smart Home PV stack and web UI
+- hosts: green-team
+  become: yes
+  roles:
+    - green-team
 
-    - name: Copy and extract challenge files
-      unarchive:
-        src: /tmp/smart-home-pv.tar.gz
-        dest: /opt/
-        mode: '0755'
+# Attacker VM - Penetration testing tools and attack scripts
+- hosts: attacker
+  become: yes
+  roles:
+    - attacker
 
-    - name: Remove local archive
-      delegate_to: localhost
-      file:
-        path: /tmp/smart-home-pv.tar.gz
-        state: absent
-
-    - name: Create docker network
-      shell: docker network create --subnet=172.20.0.0/24 playground-net
-      register: network_create
-      failed_when: network_create.rc != 0 and "already exists" not in network_create.stderr
-
-    - name: Build pv-controller image
-      shell: docker build --network=host -t scl-challenge-smart-home-pv .
-      args:
-        chdir: /opt/smart-home-pv
-
-    - name: Build attacker image
-      shell: docker build --network=host -t scl-challenge-smart-home-pv-attacker tools/attacker
-      args:
-        chdir: /opt/smart-home-pv
-
-    - name: Build noise image
-      shell: docker build --network=host -t scl-challenge-smart-home-pv-noise tools/noise
-      args:
-        chdir: /opt/smart-home-pv
-
-    - name: Build victim image
-      shell: docker build --network=host -t scl-challenge-smart-home-pv-victim tools/victim
-      args:
-        chdir: /opt/smart-home-pv
-
-    - name: Build telemetry-seeder image
-      shell: docker build --network=host -t scl-challenge-smart-home-pv-seeder tools/noise
-      args:
-        chdir: /opt/smart-home-pv
-
-    - name: Build replayer image
-      shell: docker build --network=host -t scl-challenge-smart-home-pv-replayer tools/replayer
-      args:
-        chdir: /opt/smart-home-pv
-
-    - name: Start containers
-      shell: docker-compose up -d
-      args:
-        chdir: /opt/smart-home-pv
-
-    - name: Add message to MOTD
-      copy:
-        dest: /etc/motd
-        content: |
-          Welcome to the Smart Home PV Challenge!
-          
-          The challenge environment is running in Docker containers.
-          To access the attacker machine:
-          ssh -p 2224 test@localhost
-          Password: password
-          
-          The PV Controller Dashboard is at http://localhost:8081
-          
-          Good luck!
+# Blue Team VM - Network monitoring (ntopng)
+- hosts: blue-team
+  become: yes
+  roles:
+    - blue-team

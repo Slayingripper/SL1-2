@@ -1,6 +1,6 @@
 name: smart-home-pv-sandbox
 hosts:
-  - name: game-server
+  - name: green-team
     base_box:
       image: debian-12-x86_64
       mgmt_user: test
@@ -22,9 +22,17 @@ networks:
     cidr: 10.10.10.0/24
 
 net_mappings:
-  - host: game-server
+  - host: green-team
     network: game-net
-    ip: 10.10.10.5
+    ip: 10.10.10.10
+  
+  - host: attacker
+    network: game-net
+    ip: 10.10.10.20
+  
+  - host: blue-team
+    network: game-net
+    ip: 10.10.10.30
 
 router_mappings:
   - router: router
@@ -34,4 +42,6 @@ router_mappings:
 groups:
   - name: game-nodes
     nodes:
-      - game-server
+      - green-team
+      - attacker
+      - blue-team

@@ -31,7 +31,10 @@ const NotificationPopup = () => {
         const data = await response.json();
         const unreadNotifs = (data.notifications || []).filter((n: Notification) => !n.read);
         
-        // Show new unread notifications
+        // Use ref for the check to avoid dependency on state
+        const shownIds = shownIdsRef.current;
+        const idsToShow = new Set<number>();
+        
         unreadNotifs.forEach((notif: Notification) => {
           if (!shownNotificationsRef.current.has(notif.id)) {
             setNotifications(prev => [...prev, notif]);
@@ -48,6 +51,30 @@ const NotificationPopup = () => {
             }, 30000);
           }
         });
+
+        if (idsToShow.size > 0) {
+          // Use functional updates to ensure we're adding to the latest state, 
+          // even if this callback runs slightly delayed
+          setNotifications(prev => {
+             // We can't use functional update with shownNotifications from closure unless we pass it
+             // But here we're filtering unreadNotifs which is fresh from API call.
+             // The only issue is duplicated if state update race condition.
+             return [...prev, ...unreadNotifs.filter((n: Notification) => idsToShow.has(n.id))];
+          });
+          
+          setShownNotifications(prev => {
+            const next = new Set(prev);
+            idsToShow.forEach(id => next.add(id));
+            return next;
+          });
+
+          // Auto-dismiss logic for the new ones
+          unreadNotifs
+            .filter((n: Notification) => idsToShow.has(n.id))
+            .forEach((notif: Notification) => {
+               setTimeout(() => closeNotification(notif.id), 30000);
+            });
+        }
       } catch (error) {
         console.debug('Failed to fetch notifications:', error);
       }
