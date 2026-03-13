@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import './NotificationPopup.css';
+import { logAdminActivity } from '../utils/activityLogger';
 
 interface Notification {
   id: number;
@@ -30,11 +31,7 @@ const NotificationPopup = () => {
         
         const data = await response.json();
         const unreadNotifs = (data.notifications || []).filter((n: Notification) => !n.read);
-        
-        // Use ref for the check to avoid dependency on state
-        const shownIds = shownIdsRef.current;
-        const idsToShow = new Set<number>();
-        
+
         unreadNotifs.forEach((notif: Notification) => {
           if (!shownNotificationsRef.current.has(notif.id)) {
             setNotifications(prev => [...prev, notif]);
@@ -51,30 +48,6 @@ const NotificationPopup = () => {
             }, 30000);
           }
         });
-
-        if (idsToShow.size > 0) {
-          // Use functional updates to ensure we're adding to the latest state, 
-          // even if this callback runs slightly delayed
-          setNotifications(prev => {
-             // We can't use functional update with shownNotifications from closure unless we pass it
-             // But here we're filtering unreadNotifs which is fresh from API call.
-             // The only issue is duplicated if state update race condition.
-             return [...prev, ...unreadNotifs.filter((n: Notification) => idsToShow.has(n.id))];
-          });
-          
-          setShownNotifications(prev => {
-            const next = new Set(prev);
-            idsToShow.forEach(id => next.add(id));
-            return next;
-          });
-
-          // Auto-dismiss logic for the new ones
-          unreadNotifs
-            .filter((n: Notification) => idsToShow.has(n.id))
-            .forEach((notif: Notification) => {
-               setTimeout(() => closeNotification(notif.id), 30000);
-            });
-        }
       } catch (error) {
         console.debug('Failed to fetch notifications:', error);
       }
@@ -88,6 +61,15 @@ const NotificationPopup = () => {
 
   const closeNotification = async (id: number) => {
     setNotifications(prev => prev.filter(n => n.id !== id));
+    void logAdminActivity({
+      action: 'notification_closed',
+      eventType: 'notification',
+      page: 'dashboard/notifications',
+      target: 'notification-popup',
+      details: {
+        notification_id: id,
+      },
+    });
     
     // Mark as read on server
     try {
@@ -98,10 +80,10 @@ const NotificationPopup = () => {
   };
 
   const handleLinkClick = (id: number, link?: string) => {
+    let externalLink = link || '';
     if (link) {
       // Replace internal Docker IPs with the hostname user is accessing from
       // This ensures phishing pages work when accessing from external networks (e.g., ZeroTier)
-      let externalLink = link;
       try {
         const url = new URL(link);
         // Check if this is an internal Docker IP (172.20.x.x)
@@ -114,6 +96,16 @@ const NotificationPopup = () => {
       }
       window.open(externalLink, '_blank');
     }
+    void logAdminActivity({
+      action: 'notification_link_opened',
+      eventType: 'notification',
+      page: 'dashboard/notifications',
+      target: 'notification-link',
+      details: {
+        notification_id: id,
+        destination: externalLink,
+      },
+    });
     closeNotification(id);
   };
 

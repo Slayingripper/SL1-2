@@ -8,6 +8,7 @@ import SecurityAlerts from './SecurityAlerts';
 import NotificationPopup from './NotificationPopup';
 import ContainerSwitcher from './ContainerSwitcher';
 import './Dashboard.css';
+import { logAdminActivity, useAdminActivityCapture } from '../utils/activityLogger';
 
 interface DashboardProps {
   token: string;
@@ -35,6 +36,8 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
   const [telemetryData, setTelemetryData] = useState<MQTTTelemetry[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
 
+  useAdminActivityCapture(`dashboard/${activeView}`, token);
+
   useEffect(() => {
     // Connect to MQTT broker - if local, use localhost, otherwise connect to the host running the dashboard
     const mqttHost = window.location.hostname;
@@ -46,6 +49,16 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
 
     client.on('connect', () => {
       setMqttConnected(true);
+      void logAdminActivity({
+        action: 'mqtt_connected',
+        eventType: 'system',
+        page: 'dashboard',
+        target: 'mqtt-broker',
+        details: {
+          status: 'connected',
+          destination: mqttUrl,
+        },
+      }, token);
       client.subscribe('pv/status');
       client.subscribe('pv/telemetry');
     });
@@ -71,6 +84,15 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
     client.on('error', (error) => {
       console.error('MQTT connection error:', error);
       setMqttConnected(false);
+      void logAdminActivity({
+        action: 'mqtt_connection_error',
+        eventType: 'system',
+        page: 'dashboard',
+        target: 'mqtt-broker',
+        details: {
+          status: 'error',
+        },
+      }, token);
     });
 
     // Update clock every 5 seconds to reduce unnecessary re-renders
@@ -82,11 +104,34 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
       client.end();
       clearInterval(clockInterval);
     };
-  }, []);
+  }, [token]);
 
   const handleLogout = () => {
+    void logAdminActivity({
+      action: 'logout_requested',
+      eventType: 'authentication',
+      page: `dashboard/${activeView}`,
+      target: 'logout-button',
+      details: {
+        outcome: 'initiated',
+      },
+    }, token);
     localStorage.removeItem('pv_admin_token');
     onLogout();
+  };
+
+  const handleViewChange = (view: string) => {
+    void logAdminActivity({
+      action: 'dashboard_view_changed',
+      eventType: 'navigation',
+      page: `dashboard/${activeView}`,
+      target: 'sidebar-navigation',
+      details: {
+        view,
+        destination: view,
+      },
+    }, token);
+    setActiveView(view);
   };
 
   const formatTime = (date: Date) => {
@@ -152,35 +197,35 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
           <nav className="sidebar-nav">
             <button 
               className={`nav-item ${activeView === 'overview' ? 'active' : ''}`}
-              onClick={() => setActiveView('overview')}
+              onClick={() => handleViewChange('overview')}
             >
               <span className="nav-icon">📊</span>
               <span className="nav-label">System Overview</span>
             </button>
             <button 
               className={`nav-item ${activeView === 'power' ? 'active' : ''}`}
-              onClick={() => setActiveView('power')}
+              onClick={() => handleViewChange('power')}
             >
               <span className="nav-icon">⚡</span>
               <span className="nav-label">Power Analytics</span>
             </button>
             <button 
               className={`nav-item ${activeView === 'modbus' ? 'active' : ''}`}
-              onClick={() => setActiveView('modbus')}
+              onClick={() => handleViewChange('modbus')}
             >
               <span className="nav-icon">🔧</span>
               <span className="nav-label">Modbus Control</span>
             </button>
             <button 
               className={`nav-item ${activeView === 'diagnostics' ? 'active' : ''}`}
-              onClick={() => setActiveView('diagnostics')}
+              onClick={() => handleViewChange('diagnostics')}
             >
               <span className="nav-icon">🔍</span>
               <span className="nav-label">Diagnostics</span>
             </button>
             <button 
               className={`nav-item ${activeView === 'security' ? 'active' : ''}`}
-              onClick={() => setActiveView('security')}
+              onClick={() => handleViewChange('security')}
             >
               <span className="nav-icon">🛡️</span>
               <span className="nav-label">Security Alerts</span>

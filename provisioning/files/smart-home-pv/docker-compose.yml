@@ -18,9 +18,11 @@ services:
       - MQTT_TELEMETRY_INTERVAL=3
       - MQTT_STATUS_INTERVAL=30
       - DOCUMENTS_DIR=/opt/pv-controller/Documents
+      - HOST_HOME_LOGS_DIR=/opt/pv-controller/home-logs
     volumes:
       - ./logs:/opt/pv-controller/logs
       - ${HOME}/Documents:/opt/pv-controller/Documents
+      - ${HOME}/smart-home-pv-logs:/opt/pv-controller/home-logs
     logging:
       driver: json-file
       options:

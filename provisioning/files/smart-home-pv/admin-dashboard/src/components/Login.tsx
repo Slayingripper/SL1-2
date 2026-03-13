@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import './Login.css';
+import { logAdminActivity, useAdminActivityCapture } from '../utils/activityLogger';
 
 interface LoginProps {
   onLoginSuccess: (token: string) => void;
@@ -12,10 +13,23 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  useAdminActivityCapture('login');
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
+
+    void logAdminActivity({
+      action: 'login_submitted',
+      eventType: 'submit',
+      page: 'login',
+      target: 'login-form',
+      details: {
+        field: 'username',
+        value: username || 'empty',
+      },
+    });
 
     try {
       const response = await axios.post('/api/admin/login', {
@@ -25,11 +39,32 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
 
       if (response.data.token) {
         localStorage.setItem('pv_admin_token', response.data.token);
+        void logAdminActivity({
+          action: 'login_success',
+          eventType: 'authentication',
+          page: 'login',
+          target: 'login-form',
+          actor: username,
+          details: {
+            outcome: 'success',
+          },
+        }, response.data.token);
         onLoginSuccess(response.data.token);
       } else {
         setError('Invalid response from server');
       }
     } catch (err: any) {
+      void logAdminActivity({
+        action: 'login_failed',
+        eventType: 'authentication',
+        page: 'login',
+        target: 'login-form',
+        actor: username || 'unknown',
+        details: {
+          outcome: err.response?.status === 401 ? 'invalid_credentials' : 'request_failed',
+          status: err.response?.status || 'network_error',
+        },
+      });
       if (err.response?.status === 401) {
         setError('Invalid credentials. Access denied.');
       } else {

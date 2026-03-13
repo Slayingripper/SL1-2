@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './SecurityAlerts.css';
+import { logAdminActivity } from '../utils/activityLogger';
 
 interface SecurityAlertsProps {
   token: string;
@@ -207,14 +208,41 @@ const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData })
       });
       setAlerts([]);
       setSecurityEvents([]);
+      void logAdminActivity({
+        action: 'security_alerts_cleared',
+        eventType: 'security',
+        page: 'dashboard/security',
+        target: 'security-alerts',
+        details: {
+          outcome: 'success',
+        },
+      }, token);
       alert('✅ All security events cleared successfully');
     } catch (error) {
       console.error('Failed to clear alerts:', error);
+      void logAdminActivity({
+        action: 'security_alerts_clear_failed',
+        eventType: 'security',
+        page: 'dashboard/security',
+        target: 'security-alerts',
+        details: {
+          outcome: 'error',
+        },
+      }, token);
       alert('❌ Failed to clear alerts. Please try again.');
     }
   };
 
   const clearLocalAlerts = () => {
+    void logAdminActivity({
+      action: 'security_local_alerts_cleared',
+      eventType: 'security',
+      page: 'dashboard/security',
+      target: 'local-alerts',
+      details: {
+        count: alerts.length,
+      },
+    }, token);
     setAlerts([]);
   };
 
@@ -233,6 +261,16 @@ const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData })
       document.body.appendChild(link);
       link.click();
       link.remove();
+      void logAdminActivity({
+        action: 'security_events_exported',
+        eventType: 'security',
+        page: 'dashboard/security',
+        target: 'security-events-export',
+        details: {
+          filename: `security_events_${new Date().toISOString().split('T')[0]}.csv`,
+          outcome: 'success',
+        },
+      }, token);
       
       alert('✅ Security log exported successfully');
     } catch (error) {
@@ -254,6 +292,16 @@ const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData })
       document.body.appendChild(link);
       link.click();
       link.remove();
+      void logAdminActivity({
+        action: 'failed_logins_exported',
+        eventType: 'security',
+        page: 'dashboard/security',
+        target: 'failed-logins-export',
+        details: {
+          filename: `failed_logins_${new Date().toISOString().split('T')[0]}.csv`,
+          outcome: 'success',
+        },
+      }, token);
       alert('✅ Failed login export initiated');
     } catch (error) {
       console.error('Failed to export failed logins:', error);
@@ -274,6 +322,16 @@ const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData })
       document.body.appendChild(link);
       link.click();
       link.remove();
+      void logAdminActivity({
+        action: 'anomalies_exported',
+        eventType: 'security',
+        page: 'dashboard/security',
+        target: 'anomalies-export',
+        details: {
+          filename: `anomalies_${new Date().toISOString().split('T')[0]}.json`,
+          outcome: 'success',
+        },
+      }, token);
       alert('✅ Anomalies export initiated');
     } catch (error) {
       console.error('Failed to export anomalies:', error);
@@ -318,6 +376,16 @@ const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData })
       setShowAcknowledgeModal(false);
       setAcknowledgeNotes('');
       setSelectedEvent(null);
+      void logAdminActivity({
+        action: 'security_alert_acknowledged',
+        eventType: 'security',
+        page: 'dashboard/security',
+        target: 'alert-acknowledgement',
+        details: {
+          outcome: 'success',
+          notes_present: acknowledgeNotes ? 'true' : 'false',
+        },
+      }, token);
       alert('✅ Alert acknowledged successfully');
     } catch (error) {
       console.error('Failed to acknowledge alert:', error);
@@ -331,6 +399,17 @@ const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData })
     if (!confirm(`Block and disconnect IP ${ip}? This will revoke any active admin sessions from that IP.`)) return;
     try {
       const resp = await axios.post('/api/admin/security/block', { ip, reason: 'Manual block via Dashboard' }, { headers: { Authorization: `Bearer ${token}` } });
+      void logAdminActivity({
+        action: 'security_ip_blocked',
+        eventType: 'security',
+        page: 'dashboard/security',
+        target: 'blocked-ip-list',
+        details: {
+          ip,
+          outcome: 'success',
+          count: resp.data.revoked_sessions || 0,
+        },
+      }, token);
       alert('✅ IP blocked: ' + ip + ` (revoked: ${resp.data.revoked_sessions})`);
       // Refresh blocked ip list
       const bl = await axios.get('/api/admin/security/blocked', { headers: { Authorization: `Bearer ${token}` } });
@@ -345,6 +424,17 @@ const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData })
     if (!ip) return;
     try {
       const resp = await axios.post('/api/admin/security/disconnect', { ip }, { headers: { Authorization: `Bearer ${token}` } });
+      void logAdminActivity({
+        action: 'security_ip_disconnected',
+        eventType: 'security',
+        page: 'dashboard/security',
+        target: 'blocked-ip-list',
+        details: {
+          ip,
+          outcome: 'success',
+          count: resp.data.revoked_sessions || 0,
+        },
+      }, token);
       alert('✅ Disconnected IP: ' + ip + ` (revoked: ${resp.data.revoked_sessions})`);
     } catch (e) {
       console.error('Disconnect failed', e);
@@ -357,6 +447,16 @@ const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData })
     if (!confirm(`Unblock IP ${ip}?`)) return;
     try {
       await axios.post('/api/admin/security/unblock', { ip }, { headers: { Authorization: `Bearer ${token}` } });
+      void logAdminActivity({
+        action: 'security_ip_unblocked',
+        eventType: 'security',
+        page: 'dashboard/security',
+        target: 'blocked-ip-list',
+        details: {
+          ip,
+          outcome: 'success',
+        },
+      }, token);
       // Refresh again
       const bl = await axios.get('/api/admin/security/blocked', { headers: { Authorization: `Bearer ${token}` } });
       setBlockedIps(bl.data.blocked_ips || {});

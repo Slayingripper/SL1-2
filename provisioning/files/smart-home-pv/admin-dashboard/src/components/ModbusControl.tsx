@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import './ModbusControl.css';
+import { logAdminActivity } from '../utils/activityLogger';
 
 interface ModbusControlProps {
   token: string;
 }
 
-const ModbusControl: React.FC<ModbusControlProps> = () => {
+const ModbusControl: React.FC<ModbusControlProps> = ({ token }) => {
   const [coilAddress, setCoilAddress] = useState('1');
   const [coilValue, setCoilValue] = useState(false);
   const [registerAddress, setRegisterAddress] = useState('1');
@@ -17,10 +18,30 @@ const ModbusControl: React.FC<ModbusControlProps> = () => {
     setLoading(true);
     setResult('');
     try {
+      void logAdminActivity({
+        action: 'modbus_write_coil_requested',
+        eventType: 'control',
+        page: 'dashboard/modbus',
+        target: 'write-coil',
+        details: {
+          address: coilAddress,
+          value: coilValue ? 'true' : 'false',
+        },
+      }, token);
       // Note: This would call a backend API endpoint that performs the Modbus write
       // For the cyber range, students need to use pymodbus directly
       setResult(`⚠️ Direct Modbus control requires pymodbus client.\nUse: client.write_coil(${coilAddress}, ${coilValue})`);
     } catch (error) {
+      void logAdminActivity({
+        action: 'modbus_write_coil_failed',
+        eventType: 'control',
+        page: 'dashboard/modbus',
+        target: 'write-coil',
+        details: {
+          address: coilAddress,
+          outcome: 'error',
+        },
+      }, token);
       setResult(`Error: ${error}`);
     } finally {
       setLoading(false);
@@ -31,8 +52,28 @@ const ModbusControl: React.FC<ModbusControlProps> = () => {
     setLoading(true);
     setResult('');
     try {
+      void logAdminActivity({
+        action: 'modbus_write_register_requested',
+        eventType: 'control',
+        page: 'dashboard/modbus',
+        target: 'write-register',
+        details: {
+          register: registerAddress,
+          value: registerValue,
+        },
+      }, token);
       setResult(`⚠️ Direct Modbus control requires pymodbus client.\nUse: client.write_register(${registerAddress}, ${registerValue})`);
     } catch (error) {
+      void logAdminActivity({
+        action: 'modbus_write_register_failed',
+        eventType: 'control',
+        page: 'dashboard/modbus',
+        target: 'write-register',
+        details: {
+          register: registerAddress,
+          outcome: 'error',
+        },
+      }, token);
       setResult(`Error: ${error}`);
     } finally {
       setLoading(false);

@@ -53,6 +53,8 @@ logger = logging.getLogger(__name__)
 DOCUMENTS_DIR = os.getenv('DOCUMENTS_DIR', '/opt/pv-controller/Documents')
 ACTION_LOGS_DIR = os.path.join(DOCUMENTS_DIR, 'actions')
 TICKETS_DIR = os.path.join(DOCUMENTS_DIR, 'tickets')
+HOST_HOME_LOGS_DIR = os.getenv('HOST_HOME_LOGS_DIR', '/opt/pv-controller/home-logs')
+ADMIN_UI_LOG_FILE = os.path.join(HOST_HOME_LOGS_DIR, 'admin_dashboard_actions.log')
 
 
 def _safe_name(value, fallback='item'):
@@ -64,6 +66,7 @@ def _safe_name(value, fallback='item'):
 def ensure_documents_dirs():
     os.makedirs(ACTION_LOGS_DIR, exist_ok=True)
     os.makedirs(TICKETS_DIR, exist_ok=True)
+    os.makedirs(HOST_HOME_LOGS_DIR, exist_ok=True)
 
 
 def write_action_log(action, actor='unknown', details=None):
@@ -83,6 +86,26 @@ def write_action_log(action, actor='unknown', details=None):
     with open(path, 'w') as fh:
         json.dump(payload, fh, indent=2)
     return path
+
+
+def append_admin_ui_log(action, actor='anonymous', event_type='activity', page='unknown', target=None, details=None):
+    os.makedirs(os.path.dirname(ADMIN_UI_LOG_FILE), exist_ok=True)
+    timestamp = datetime.now().isoformat()
+    safe_details = details or {}
+    parts = [
+        timestamp,
+        f"actor={actor}",
+        f"event_type={event_type}",
+        f"action={action}",
+        f"page={page}",
+    ]
+    if target:
+        parts.append(f"target={target}")
+    if safe_details:
+        parts.append(f"details={json.dumps(safe_details, sort_keys=True)}")
+    with open(ADMIN_UI_LOG_FILE, 'a') as fh:
+        fh.write(' | '.join(parts) + '\n')
+    return ADMIN_UI_LOG_FILE
 
 
 def write_ticket_text(ticket_type, title, body_lines):
@@ -1248,6 +1271,86 @@ def get_admin_logs_api():
     
     return jsonify({"logs": logs})
 
+
+@app.route('/api/admin/activity', methods=['POST'])
+def admin_activity_log():
+    """Append sanitized admin dashboard UI activity to a .log file."""
+    auth_header = request.headers.get('Authorization', '')
+    token_data = None
+
+    if auth_header.startswith('Bearer '):
+        token = auth_header.split(' ', 1)[1]
+        token_data = validate_token(token, 'admin')
+        if not token_data:
+            return jsonify({'error': 'Invalid or expired token'}), 403
+
+    data = request.json or {}
+    action = str(data.get('action') or 'unknown_action')[:120]
+    event_type = str(data.get('event_type') or 'activity')[:80]
+    page = str(data.get('page') or 'unknown')[:120]
+    target = data.get('target')
+    if target is not None:
+        target = str(target)[:160]
+
+    details = data.get('details') or {}
+    if not isinstance(details, dict):
+        details = {'value': str(details)[:500]}
+
+    allowed_detail_keys = {
+        'component',
+        'control',
+        'destination',
+        'field',
+        'field_type',
+        'form',
+        'href',
+        'label',
+        'method',
+        'outcome',
+        'result',
+        'section',
+        'selection',
+        'state',
+        'status',
+        'value',
+        'view',
+        'notification_id',
+        'ip',
+        'notes_present',
+        'filename',
+        'count',
+        'address',
+        'register',
+    }
+    sanitized_details = {}
+    for key, value in details.items():
+        if key not in allowed_detail_keys:
+            continue
+        if isinstance(value, (dict, list, tuple)):
+            sanitized_details[key] = json.dumps(value)[:500]
+        elif isinstance(value, (str, int, float, bool)) or value is None:
+            sanitized_details[key] = value if value is None else str(value)[:500]
+
+    actor = str(data.get('actor') or (token_data or {}).get('username') or 'anonymous')[:80]
+    client_ip = request.remote_addr or 'unknown'
+    sanitized_details.setdefault('ip', client_ip)
+    sanitized_details.setdefault('method', request.method)
+
+    try:
+        log_path = append_admin_ui_log(
+            action=action,
+            actor=actor,
+            event_type=event_type,
+            page=page,
+            target=target,
+            details=sanitized_details,
+        )
+    except Exception:
+        logger.exception('Failed to append admin UI activity log')
+        return jsonify({'error': 'Failed to write log'}), 500
+
+    return jsonify({'result': 'ok', 'log_file': log_path})
+
 # ============================================================================
 # HTTP ROUTES - Flags
 # ============================================================================
@@ -1402,8 +1505,10 @@ def get_admin_logs(log_type):
     if not token_data:
         return jsonify({"error": "Invalid or expired token"}), 403
     
-    # Read log file
-    log_file = f"/opt/pv-controller/logs/{log_type}.log"
+    if log_type == 'admin_dashboard_actions':
+        log_file = ADMIN_UI_LOG_FILE
+    else:
+        log_file = f"/opt/pv-controller/logs/{log_type}.log"
     
     if not os.path.exists(log_file):
         return jsonify({"error": "Log file not found"}), 404

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './Diagnostics.css';
+import { logAdminActivity } from '../utils/activityLogger';
 
 interface DiagnosticsProps {
   token: string;
@@ -10,6 +11,68 @@ interface DiagnosticsProps {
 const Diagnostics: React.FC<DiagnosticsProps> = ({ token, systemStatus }) => {
   const [logs, setLogs] = useState<string[]>([]);
   const [flag, setFlag] = useState('');
+
+  const fetchLogs = async (reason: 'initial' | 'poll' | 'manual' = 'poll') => {
+    try {
+      const response = await axios.get('/api/admin/logs/admin_dashboard_actions', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.data.logs) {
+        setLogs(response.data.logs);
+      }
+      if (reason !== 'poll') {
+        void logAdminActivity({
+          action: 'diagnostics_logs_refreshed',
+          eventType: 'diagnostics',
+          page: 'dashboard/diagnostics',
+          target: 'admin-dashboard-actions-log',
+          details: {
+            outcome: 'success',
+            count: response.data.logs?.length || 0,
+          },
+        }, token);
+      }
+    } catch (error) {
+      console.error('Error fetching logs:', error);
+      if (reason !== 'poll') {
+        void logAdminActivity({
+          action: 'diagnostics_logs_refresh_failed',
+          eventType: 'diagnostics',
+          page: 'dashboard/diagnostics',
+          target: 'admin-dashboard-actions-log',
+          details: {
+            outcome: 'error',
+          },
+        }, token);
+      }
+    }
+  };
+
+  const exportLogs = async () => {
+    const filename = `admin_dashboard_actions_${new Date().toISOString().split('T')[0]}.log`;
+    const content = logs.join('\n');
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+
+    void logAdminActivity({
+      action: 'diagnostics_logs_exported',
+      eventType: 'diagnostics',
+      page: 'dashboard/diagnostics',
+      target: 'admin-dashboard-actions-log',
+      details: {
+        filename,
+        count: logs.length,
+        outcome: 'success',
+      },
+    }, token);
+  };
 
   useEffect(() => {
     // Fetch the flag after successful authentication
@@ -26,25 +89,13 @@ const Diagnostics: React.FC<DiagnosticsProps> = ({ token, systemStatus }) => {
       }
     };
 
-    // Fetch system logs
-    const fetchLogs = async () => {
-      try {
-        const response = await axios.get('/api/admin/logs', {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (response.data.logs) {
-          setLogs(response.data.logs);
-        }
-      } catch (error) {
-        console.error('Error fetching logs:', error);
-      }
-    };
-
     fetchFlag();
-    fetchLogs();
+    fetchLogs('initial');
 
     // Refresh logs every 20 seconds to reduce polling overhead
-    const interval = setInterval(fetchLogs, 20000);
+    const interval = setInterval(() => {
+      void fetchLogs('poll');
+    }, 20000);
     return () => clearInterval(interval);
   }, [token]);
 
@@ -107,13 +158,13 @@ const Diagnostics: React.FC<DiagnosticsProps> = ({ token, systemStatus }) => {
 
       <div className="logs-panel">
         <div className="logs-header">
-          <h3>System Logs</h3>
+          <h3>Admin Activity Logs</h3>
           <div className="log-controls">
-            <button className="control-btn">
+            <button className="control-btn" onClick={() => void fetchLogs('manual')}>
               <span>🔄</span>
               Refresh
             </button>
-            <button className="control-btn">
+            <button className="control-btn" onClick={exportLogs}>
               <span>⬇️</span>
               Export
             </button>
@@ -123,32 +174,14 @@ const Diagnostics: React.FC<DiagnosticsProps> = ({ token, systemStatus }) => {
           {logs.length > 0 ? (
             logs.map((log, index) => (
               <div key={index} className="log-entry">
-                <span className="log-timestamp">[{new Date().toISOString()}]</span>
                 <span className="log-message">{log}</span>
               </div>
             ))
           ) : (
             <div className="log-entry">
-              <span className="log-timestamp">[{new Date().toISOString()}]</span>
-              <span className="log-message log-info">System operational - No errors detected</span>
+              <span className="log-message log-info">No admin dashboard actions have been logged yet</span>
             </div>
           )}
-          <div className="log-entry">
-            <span className="log-timestamp">[{new Date().toISOString()}]</span>
-            <span className="log-message log-success">Admin authentication successful</span>
-          </div>
-          <div className="log-entry">
-            <span className="log-timestamp">[{new Date(Date.now() - 120000).toISOString()}]</span>
-            <span className="log-message log-info">MQTT connection established to broker</span>
-          </div>
-          <div className="log-entry">
-            <span className="log-timestamp">[{new Date(Date.now() - 240000).toISOString()}]</span>
-            <span className="log-message log-info">Modbus TCP server listening on port 502</span>
-          </div>
-          <div className="log-entry">
-            <span className="log-timestamp">[{new Date(Date.now() - 360000).toISOString()}]</span>
-            <span className="log-message log-success">System startup completed</span>
-          </div>
         </div>
       </div>
 
