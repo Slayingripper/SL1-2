@@ -95,7 +95,6 @@ const ModbusControl: React.FC<ModbusControlProps> = ({ token, siteData }) => {
       };
     }
     const meta = siteById(assetId)!;
-    const idx = MAP_SITES.findIndex(s => s.id === assetId);
     if (meta.type === 'army') {
       const load = Math.round((meta.ratedLoadKw ?? 30) * 1000);
       return {
@@ -105,7 +104,7 @@ const ModbusControl: React.FC<ModbusControlProps> = ({ token, siteData }) => {
         equipment: meta.model,
         serial: meta.serial,
         feeder: meta.feeder,
-        unitId: idx + 2,
+        unitId: meta.modbusUnit,
         consumer: true,
         registers: consumerRegisters(load),
         notice: `This interface controls the ${meta.name} LV switchboard over Modbus/TCP. A write to coil 1 sheds load feeding a restricted military installation — unauthorized operation may cut power to critical systems.`,
@@ -120,7 +119,7 @@ const ModbusControl: React.FC<ModbusControlProps> = ({ token, siteData }) => {
       equipment: meta.model,
       serial: meta.serial,
       feeder: meta.feeder,
-      unitId: idx + 2,
+      unitId: meta.modbusUnit,
       consumer: false,
       registers: producerRegisters(cap),
       notice: `This interface provides direct access to the ${meta.name} ${meta.type === 'plant' ? 'central inverter / substation' : 'inverter'} over Modbus/TCP. The protocol carries no authentication — a write to coil 1 forces AC output to 0 kW.`,
@@ -154,13 +153,19 @@ const ModbusControl: React.FC<ModbusControlProps> = ({ token, siteData }) => {
         target: 'write-coil',
         details: { asset: profile.id, address: coilAddress, value: coilValue ? 'true' : 'false' },
       }, token);
-      setResult(
-        `⚠️ Direct Modbus control requires a pymodbus client.\n` +
-        `${targetLine}\n` +
-        `Use: client.write_coil(${coilAddress}, ${coilValue}, slave=${profile.unitId})`
-      );
+      const resp = await fetch('/api/modbus/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ kind: 'coil', address: Number(coilAddress), value: coilValue, unit: profile.unitId }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setResult(`❌ Write failed: ${data.error || resp.status}`);
+        return;
+      }
+      setResult(formatWriteResult('coil', Number(coilAddress), coilValue ? 'ON (0xFF00)' : 'OFF (0x0000)', data));
     } catch (error) {
-      setResult(`Error: ${error}`);
+      setResult(`❌ Error: ${error}`);
     } finally {
       setLoading(false);
     }
@@ -177,16 +182,40 @@ const ModbusControl: React.FC<ModbusControlProps> = ({ token, siteData }) => {
         target: 'write-register',
         details: { asset: profile.id, register: registerAddress, value: registerValue },
       }, token);
-      setResult(
-        `⚠️ Direct Modbus control requires a pymodbus client.\n` +
-        `${targetLine}\n` +
-        `Use: client.write_register(${registerAddress}, ${registerValue}, slave=${profile.unitId})`
-      );
+      const resp = await fetch('/api/modbus/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ kind: 'register', address: Number(registerAddress), value: Number(registerValue), unit: profile.unitId }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setResult(`❌ Write failed: ${data.error || resp.status}`);
+        return;
+      }
+      setResult(formatWriteResult('register', Number(registerAddress), String(registerValue), data));
     } catch (error) {
-      setResult(`Error: ${error}`);
+      setResult(`❌ Error: ${error}`);
     } finally {
       setLoading(false);
     }
+  };
+
+  const formatWriteResult = (
+    kind: 'coil' | 'register',
+    address: number,
+    valueLabel: string,
+    data: { wrote?: boolean; blocked_by_defense?: boolean; plant_status?: string },
+  ) => {
+    const lines = [`${targetLine}`, `Write ${kind} ${address} → ${valueLabel}`];
+    if (data.blocked_by_defense) {
+      lines.push('🛡️ BLOCKED by blue-team Modbus write protection — the write did not land.');
+    } else if (data.wrote) {
+      lines.push('✅ Write acknowledged by the controller.');
+    } else {
+      lines.push('⚠️ Controller returned a Modbus exception for this write.');
+    }
+    if (data.plant_status) lines.push(`Plant status: ${data.plant_status}`);
+    return lines.join('\n');
   };
 
   return (

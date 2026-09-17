@@ -22,6 +22,8 @@ export interface SiteMeta {
   commissioned: string;
   feeder: string;
   description: string;
+  /** Modbus/TCP unit (slave) id on the controller gateway (port 15002) */
+  modbusUnit: number;
 }
 
 export const MAP_SITES: SiteMeta[] = [
@@ -36,6 +38,7 @@ export const MAP_SITES: SiteMeta[] = [
     commissioned: '2022-03-14',
     feeder: 'LV feeder F1 · 230 V',
     description: 'Residential rooftop array, 13 modules S-E orientation.',
+    modbusUnit: 2,
   },
   {
     id: 'house-2',
@@ -48,6 +51,7 @@ export const MAP_SITES: SiteMeta[] = [
     commissioned: '2021-09-02',
     feeder: 'LV feeder F1 · 230 V',
     description: 'Residential rooftop array, 10 modules S orientation.',
+    modbusUnit: 3,
   },
   {
     id: 'house-3',
@@ -60,6 +64,7 @@ export const MAP_SITES: SiteMeta[] = [
     commissioned: '2023-05-21',
     feeder: 'LV feeder F1 · 230 V',
     description: 'Residential rooftop array, 16 modules S-W orientation.',
+    modbusUnit: 4,
   },
   {
     id: 'pv-plant',
@@ -72,6 +77,7 @@ export const MAP_SITES: SiteMeta[] = [
     commissioned: '2020-11-30',
     feeder: 'MV feeder F3 · 400 V · 3-phase',
     description: 'Ground-mounted plant with central inverter and 11/0.4 kV substation TX-01.',
+    modbusUnit: 1,
   },
   {
     id: 'army-base',
@@ -84,6 +90,7 @@ export const MAP_SITES: SiteMeta[] = [
     commissioned: '2019-06-11',
     feeder: 'Fed by Substation TX-01 · 400 V · 3-phase',
     description: 'Military installation drawing from the plant substation. Restricted area.',
+    modbusUnit: 5,
   },
 ];
 
