@@ -46,6 +46,16 @@
           <div style="display:flex;gap:0.5rem;margin-top:0.5rem"><button id="replayer-start" class="btn">Start Replay</button><button id="replayer-stop" class="btn">Stop Replay</button></div>
         </section>
         <section class="card">
+          <h2>Support Ticket</h2>
+          <form id="ticket-form" class="device-form">
+            <input id="ticket-name" placeholder="your name" class="input" />
+            <input id="ticket-subject" placeholder="subject" class="input" required />
+            <textarea id="ticket-desc" placeholder="describe the issue" class="input" rows="3" required></textarea>
+            <button type="submit" class="btn">Submit ticket</button>
+          </form>
+          <div id="ticket-result" style="font-size:0.85rem;margin-top:0.4rem"></div>
+        </section>
+        <section class="card">
           <h2>Logs</h2>
           <pre id="log-output">(recent logs)</pre>
         </section>
@@ -70,5 +80,34 @@
       </section>
     </main>
     <script src="/static/dashboard.js"></script>
+    <script>
+      document.getElementById('ticket-form').addEventListener('submit', async function (e) {
+        e.preventDefault();
+        var out = document.getElementById('ticket-result');
+        try {
+          var resp = await fetch('/api/tickets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              reporter: document.getElementById('ticket-name').value,
+              subject: document.getElementById('ticket-subject').value,
+              description: document.getElementById('ticket-desc').value,
+            }),
+          });
+          var data = await resp.json();
+          if (resp.ok) {
+            out.textContent = 'Ticket #' + data.ticket_id + ' submitted. Support will review it.';
+            out.style.color = '#3fb950';
+            document.getElementById('ticket-form').reset();
+          } else {
+            out.textContent = data.error || 'Submission failed';
+            out.style.color = '#ff4545';
+          }
+        } catch (err) {
+          out.textContent = 'Submission failed - network error';
+          out.style.color = '#ff4545';
+        }
+      });
+    </script>
   </body>
 </html>

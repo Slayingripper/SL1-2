@@ -50,6 +50,8 @@ function App() {
   const handleLoginSuccess = (newToken: string, newRole?: 'admin' | 'blueteam') => {
     setToken(newToken);
     setRole(newRole || 'admin');
+    localStorage.setItem('pv_admin_token', newToken);
+    localStorage.setItem('pv_admin_role', newRole || 'admin');
   };
 
   const handleLogout = () => {

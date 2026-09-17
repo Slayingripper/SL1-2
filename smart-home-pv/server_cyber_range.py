@@ -175,6 +175,10 @@ class ChallengeState:
         self.blocked_ips = {}  # ip -> {blocked_at, blocked_by, reason}
         self.notifications = []  # Pop-up notifications for victim dashboard
         self.notification_seq = 0  # Monotonic counter so IDs never collide after trimming
+
+        # Support/incident tickets shown in the admin dashboard Tickets view
+        self.tickets = []
+        self.ticket_seq = 0
         
         # Use RLock (reentrant lock) since add_failed_login calls add_security_event
         # while holding the lock, which would deadlock with a regular Lock
@@ -185,6 +189,7 @@ class ChallengeState:
         self.failed_logins_file = '/opt/pv-controller/logs/failed_logins.json'
         self.blocked_ips_file = '/opt/pv-controller/logs/blocked_ips.json'
         self.anomalous_data_file = '/opt/pv-controller/logs/anomalous_data.json'
+        self.tickets_file = '/opt/pv-controller/logs/tickets.json'
         # Load persisted security events (if any)
         try:
             self._load_security_events()
@@ -204,7 +209,70 @@ class ChallengeState:
             self._load_anomalous_data()
         except Exception:
             pass
-    
+        try:
+            self._load_tickets()
+        except Exception:
+            pass
+
+    def add_ticket(self, subject, description, reporter, source='user',
+                   severity=None, category=None, ip=None):
+        """Create a ticket. source is 'user' (submitted) or 'security_monitor'
+        (auto-raised from a suspicious incident). Auto tickets are deduplicated
+        against open tickets with the same subject to avoid flooding."""
+        with self.lock:
+            if source == 'security_monitor':
+                for t in self.tickets:
+                    if (t['source'] == 'security_monitor'
+                            and t['subject'] == subject
+                            and t['status'] in ('open', 'investigating')):
+                        t['count'] = t.get('count', 1) + 1
+                        t['last_seen'] = datetime.now().isoformat()
+                        self._save_tickets_safe()
+                        return t
+            self.ticket_seq += 1
+            ticket = {
+                'id': self.ticket_seq,
+                'created': datetime.now().isoformat(),
+                'subject': str(subject)[:200],
+                'description': str(description)[:2000],
+                'reporter': str(reporter)[:80],
+                'source': source,
+                'severity': severity,
+                'category': category,
+                'ip': ip,
+                'status': 'open',
+                'count': 1,
+                'last_seen': datetime.now().isoformat(),
+            }
+            self.tickets.append(ticket)
+            if len(self.tickets) > 200:
+                self.tickets = self.tickets[-200:]
+            self._save_tickets_safe()
+            return ticket
+
+    def update_ticket_status(self, ticket_id, status):
+        with self.lock:
+            for t in self.tickets:
+                if t['id'] == ticket_id:
+                    t['status'] = status
+                    self._save_tickets_safe()
+                    return t
+            return None
+
+    def _save_tickets_safe(self):
+        try:
+            with open(self.tickets_file, 'w') as f:
+                json.dump({'seq': self.ticket_seq, 'tickets': self.tickets}, f)
+        except Exception:
+            logger.exception('Failed to persist tickets')
+
+    def _load_tickets(self):
+        if os.path.exists(self.tickets_file):
+            with open(self.tickets_file, 'r') as f:
+                data = json.load(f)
+            self.tickets = data.get('tickets', [])[-200:]
+            self.ticket_seq = int(data.get('seq', len(self.tickets)))
+
     def mark_event(self, event_name, metadata=None):
         """Mark an event as completed"""
         with self.lock:
@@ -271,6 +339,20 @@ class ChallengeState:
                     self.notifications = self.notifications[-20:]
             except Exception:
                 logger.exception("Failed to raise HMI notification for security event")
+            # Suspicious incidents automatically raise a ticket for admin triage
+            if event['suspicious']:
+                try:
+                    self.add_ticket(
+                        subject=message,
+                        description=details or message,
+                        reporter=source or 'Security Monitor',
+                        source='security_monitor',
+                        severity=severity,
+                        category=category,
+                        ip=ip,
+                    )
+                except Exception:
+                    logger.exception('Failed to auto-create incident ticket')
             # Log events for visibility in container logs
             try:
                 logger.warning(f"Security Event [{severity}] {category}: {message} - {details} (source: {source})")
@@ -491,6 +573,31 @@ def _save_blueteam_password(password):
 
 _load_blueteam_password()
 
+# Persist a rotated admin password the same way, so a blue-team credential
+# reset survives container restarts.
+ADMIN_CRED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'admin_credentials.json')
+
+def _load_admin_password():
+    global ADMIN_PASSWORD
+    try:
+        if os.path.exists(ADMIN_CRED_FILE):
+            with open(ADMIN_CRED_FILE, 'r') as f:
+                data = json.load(f)
+            stored = data.get('password')
+            if stored and isinstance(stored, str) and len(stored) >= 6:
+                ADMIN_PASSWORD = stored
+    except Exception:
+        logger.exception('Failed to load admin credentials')
+
+def _save_admin_password(password):
+    try:
+        with open(ADMIN_CRED_FILE, 'w') as f:
+            json.dump({'username': ADMIN_USERNAME, 'password': password}, f)
+    except Exception:
+        logger.exception('Failed to persist admin credentials')
+
+_load_admin_password()
+
 # ── Blue-team defense state ──────────────────────────────────────────────
 # Populated when the defender logs in; cleared on logout so the system
 # reverts to insecure defaults — matching the training scenario design.
@@ -658,9 +765,9 @@ def ip_matches(ip, allowlist):
                     return True
             try:
                 import ipaddress as _ipa
-                if ip in _ipa.ip_network(entry, strict=False):
+                if _ipa.ip_address(ip) in _ipa.ip_network(entry, strict=False):
                     return True
-            except Exception:
+            except ValueError:
                 pass
         elif ip.startswith(entry + '.'):
             return True
@@ -668,12 +775,11 @@ def ip_matches(ip, allowlist):
 
 
 def is_ip_blacklisted(ip):
-    """Manual IP blacklist check."""
+    """Manual IP blacklist check (exact IPs, prefixes, or CIDR subnets)."""
     settings = blueteam_defense['settings']
     if not (blueteam_defense['active'] and settings.get('ip_blacklist_enabled')):
         return False
-    manual = [s.strip() for s in settings.get('ip_blacklist', []) if str(s).strip()]
-    return ip in manual
+    return ip_matches(ip, settings.get('ip_blacklist', []))
 
 
 def ip_is_whitelisted(ip):
@@ -1550,8 +1656,16 @@ def admin_login():
         state.add_security_event('medium', 'Authentication', 'Blocked IP attempted admin login', f'IP: {client_ip}', 'Authentication Service', ip=client_ip)
         return jsonify({"error": "Access denied"}), 403
 
+    # ── Credential check ───────────────────────────────────────────────
+    is_blueteam = (username == BLUETEAM_USERNAME and password == BLUETEAM_PASSWORD)
+    is_admin     = (username == ADMIN_USERNAME  and password == ADMIN_PASSWORD)
+
     # ── Blue-team rate-limit (only active when blueteam is logged in) ───
-    if blueteam_defense['active'] and blueteam_defense['settings'].get('login_rate_limit'):
+    # Throttles brute-force (invalid) attempts only; operators with valid
+    # admin/blueteam credentials are never locked out by the limiter.
+    if (not (is_admin or is_blueteam)
+            and blueteam_defense['active']
+            and blueteam_defense['settings'].get('login_rate_limit')):
         now = time.time()
         window = 60
         _blueteam_login_ts[:] = [t for t in _blueteam_login_ts if now - t < window]
@@ -1562,10 +1676,6 @@ def admin_login():
                                      'Blue Team Defense', ip=client_ip)
             return jsonify({"error": "Rate limit exceeded – try again later"}), 429
         _blueteam_login_ts.append(now)
-
-    # ── Credential check ───────────────────────────────────────────────
-    is_blueteam = (username == BLUETEAM_USERNAME and password == BLUETEAM_PASSWORD)
-    is_admin     = (username == ADMIN_USERNAME  and password == ADMIN_PASSWORD)
 
     if is_blueteam:
         # Activate defense system when defender logs in. Settings created in a
@@ -1746,6 +1856,66 @@ def blueteam_change_password():
         logger.exception('Failed to write password-change action log')
     logger.info("Blue team operator changed their password")
     return jsonify({'status': 'ok', 'message': 'Password updated'})
+
+
+@app.route('/api/blueteam/users', methods=['GET'])
+def blueteam_list_users():
+    """List operator accounts for the blue-team Users tab."""
+    token = request.headers.get('Authorization', '').removeprefix('Bearer ').strip()
+    if not _validate_blueteam_token(token):
+        return jsonify({'error': 'Unauthorized'}), 401
+    return jsonify({'users': [
+        {'username': ADMIN_USERNAME, 'role': 'admin',
+         'description': 'HMI administrator — full SCADA dashboard access'},
+        {'username': BLUETEAM_USERNAME, 'role': 'blueteam',
+         'description': 'Blue team operator — defense console access'},
+    ]})
+
+
+@app.route('/api/blueteam/users/change-password', methods=['POST'])
+def blueteam_user_change_password():
+    """Blue-team privilege: reset any operator account's password."""
+    global ADMIN_PASSWORD, BLUETEAM_PASSWORD
+    token = request.headers.get('Authorization', '').removeprefix('Bearer ').strip()
+    token_data = _validate_blueteam_token(token)
+    if not token_data:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    data = request.json or {}
+    username = (data.get('username') or '').strip()
+    new_pw = data.get('new_password') or ''
+    confirm = data.get('confirm_password')
+
+    if username not in (ADMIN_USERNAME, BLUETEAM_USERNAME):
+        return jsonify({'error': 'Unknown user'}), 404
+    if len(new_pw) < 6:
+        return jsonify({'error': 'New password must be at least 6 characters'}), 400
+    if confirm is not None and new_pw != confirm:
+        return jsonify({'error': 'New password confirmation does not match'}), 400
+
+    if username == ADMIN_USERNAME:
+        if new_pw == ADMIN_PASSWORD:
+            return jsonify({'error': 'New password must differ from the current password'}), 400
+        ADMIN_PASSWORD = new_pw
+        _save_admin_password(new_pw)
+    else:
+        if new_pw == BLUETEAM_PASSWORD:
+            return jsonify({'error': 'New password must differ from the current password'}), 400
+        BLUETEAM_PASSWORD = new_pw
+        _save_blueteam_password(new_pw)
+
+    state.add_security_event('high', 'Authentication',
+                             f'Password reset for user: {username}',
+                             'Credential rotated via blue-team Users console',
+                             'Blue Team Authentication')
+    try:
+        write_action_log('blueteam_user_password_reset',
+                         actor=token_data.get('username', 'blueteam'),
+                         details={'target_user': username, 'status': 'success'})
+    except Exception:
+        logger.exception('Failed to write user password-reset action log')
+    logger.info(f"Blue team reset password for user: {username}")
+    return jsonify({'status': 'ok', 'message': f'Password updated for {username}'})
 
 
 @app.route('/api/blueteam/defense_status')
@@ -2284,6 +2454,71 @@ def challenge_status():
         "credentials_stolen": len(state.stolen_creds),
         "flags_available": [k for k, v in state.events.items() if v and k in FLAGS]
     })
+
+@app.route("/api/tickets", methods=["POST"])
+def submit_ticket():
+    """Public ticket submission for normal users (no account required)."""
+    data = request.get_json(silent=True) or {}
+    reporter = (data.get('reporter') or data.get('name') or '').strip()
+    subject = (data.get('subject') or '').strip()
+    description = (data.get('description') or '').strip()
+
+    if not subject or not description:
+        return jsonify({'error': 'Subject and description are required'}), 400
+    if not reporter:
+        reporter = 'anonymous'
+
+    ticket = state.add_ticket(
+        subject=subject,
+        description=description,
+        reporter=reporter,
+        source='user',
+        category=(data.get('category') or 'support'),
+        ip=request.remote_addr,
+    )
+    try:
+        write_action_log('ticket_submitted', actor=reporter,
+                         details={'ticket_id': ticket['id'], 'subject': ticket['subject']})
+    except Exception:
+        pass
+    return jsonify({'status': 'ok', 'ticket_id': ticket['id']}), 201
+
+
+@app.route("/api/admin/tickets", methods=["GET"])
+def admin_list_tickets():
+    """All tickets (user submissions + auto-raised incidents) for the admin."""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    if not validate_token(token):
+        return jsonify({"error": "Invalid or expired token"}), 403
+    with state.lock:
+        tickets = list(reversed(state.tickets))
+    return jsonify({
+        'tickets': tickets,
+        'open_count': sum(1 for t in tickets if t['status'] == 'open'),
+    })
+
+
+@app.route("/api/admin/tickets/<int:ticket_id>/status", methods=["POST"])
+def admin_update_ticket(ticket_id):
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    token_data = validate_token(token)
+    if not token_data:
+        return jsonify({"error": "Invalid or expired token"}), 403
+    data = request.get_json(silent=True) or {}
+    status = (data.get('status') or '').strip()
+    if status not in ('open', 'investigating', 'resolved', 'closed'):
+        return jsonify({'error': 'Invalid status'}), 400
+    ticket = state.update_ticket_status(ticket_id, status)
+    if not ticket:
+        return jsonify({'error': 'Ticket not found'}), 404
+    try:
+        write_action_log('ticket_status_changed',
+                         actor=token_data.get('username', 'admin'),
+                         details={'ticket_id': ticket_id, 'status': status})
+    except Exception:
+        pass
+    return jsonify({'status': 'ok', 'ticket': ticket})
+
 
 @app.route("/api/admin/security/events")
 def get_security_events():

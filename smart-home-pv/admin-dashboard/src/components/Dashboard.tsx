@@ -2,11 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import mqtt from 'mqtt';
 import axios from 'axios';
 import SystemOverview from './SystemOverview';
+import AreaMap from './AreaMap';
 import PowerChart from './PowerChart';
 import ModbusControl from './ModbusControl';
 import SecurityAlerts from './SecurityAlerts';
+import Tickets from './Tickets';
 import NotificationPopup from './NotificationPopup';
-import ContainerSwitcher from './ContainerSwitcher';
 import './Dashboard.css';
 import { logAdminActivity, useAdminActivityCapture } from '../utils/activityLogger';
 
@@ -33,6 +34,33 @@ interface MQTTTelemetry {
   current_a?: number;
 }
 
+export interface SeederInfo {
+  container?: string;
+  ip?: string;
+  pid?: number;
+  interval_s?: number;
+  topic?: string;
+  started_ts?: number;
+  seq?: number;
+  uptime_s?: number;
+}
+
+export interface SiteTelemetry {
+  site?: string;
+  ts?: number;
+  power_kw?: number;
+  load_kw?: number;
+  voltage_v?: number;
+  current_a?: number;
+  status?: string;
+  seeder?: SeederInfo;
+}
+
+export interface SiteLive {
+  latest: SiteTelemetry | null;
+  history: SiteTelemetry[];
+}
+
 interface ActiveDefense {
   telemetry_validation: boolean;
   telemetry_min_kw: number;
@@ -44,6 +72,7 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
   const [mqttConnected, setMqttConnected] = useState(false);
   const [systemStatus, setSystemStatus] = useState<MQTTStatus | null>(null);
   const [telemetryData, setTelemetryData] = useState<MQTTTelemetry[]>([]);
+  const [siteData, setSiteData] = useState<Record<string, SiteLive>>({});
   const [currentTime, setCurrentTime] = useState(new Date());
   const [defense, setDefense] = useState<ActiveDefense>({
     telemetry_validation: false,
@@ -118,6 +147,9 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
         }, token);
         client?.subscribe('pv/status');
         client?.subscribe('pv/telemetry');
+        // Area map: per-site live feed + retained seed history
+        client?.subscribe('pv/telemetry/+');
+        client?.subscribe('pv/history/+');
       });
 
       client.on('message', (_topic, message) => {
@@ -141,6 +173,30 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
               // Keep last 60 data points for the charts
               return newData.slice(-60);
             });
+          } else if (_topic.startsWith('pv/telemetry/')) {
+            // Area-map site feed. The blue-team telemetry-validation gate above
+            // is scoped to the plant's pv/telemetry topic only.
+            const id = _topic.split('/')[2];
+            if (id) {
+              setSiteData(prev => {
+                const cur = prev[id] || { latest: null, history: [] };
+                return {
+                  ...prev,
+                  [id]: { latest: data, history: [...cur.history, data].slice(-120) },
+                };
+              });
+            }
+          } else if (_topic.startsWith('pv/history/')) {
+            const id = _topic.split('/')[2];
+            if (id && Array.isArray(data.points)) {
+              setSiteData(prev => {
+                const cur = prev[id] || { latest: null, history: [] };
+                // Retained seed history only fills an empty series — never
+                // clobber live accumulation on reconnect.
+                if (cur.history.length >= 5) return prev;
+                return { ...prev, [id]: { ...cur, history: data.points.slice(-120) } };
+              });
+            }
           }
         } catch (error) {
           console.error('Error parsing MQTT message:', error);
@@ -265,11 +321,6 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
     <div className="dashboard">
       {/* Notification Pop-ups */}
       <NotificationPopup />
-      {/* Container switcher cog */}
-      <div style={{display: 'flex', alignItems: 'center', gap: '6px', paddingLeft: '12px'}}>
-        <ContainerSwitcher />
-      </div>
-      
       <header className="dashboard-header">
         <div className="header-left">
           <div className="header-logo">
@@ -318,29 +369,45 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
               <span className="nav-label">Plant Overview</span>
               <span className={`nav-led nav-led-ok`} />
             </button>
-            <button 
+            <button
+              className={`nav-item ${activeView === 'areamap' ? 'active' : ''}`}
+              onClick={() => handleViewChange('areamap')}
+            >
+              <span className="nav-index">02</span>
+              <span className="nav-label">Area Map</span>
+              <span className={`nav-led nav-led-ok`} />
+            </button>
+            <button
               className={`nav-item ${activeView === 'power' ? 'active' : ''}`}
               onClick={() => handleViewChange('power')}
             >
-              <span className="nav-index">02</span>
+              <span className="nav-index">03</span>
               <span className="nav-label">Power Analytics</span>
               <span className={`nav-led nav-led-ok`} />
             </button>
-            <button 
+            <button
               className={`nav-item ${activeView === 'modbus' ? 'active' : ''}`}
               onClick={() => handleViewChange('modbus')}
             >
-              <span className="nav-index">03</span>
+              <span className="nav-index">04</span>
               <span className="nav-label">Modbus Control</span>
               <span className={`nav-led ${halted ? 'nav-led-crit' : 'nav-led-ok'}`} />
             </button>
-            <button 
+            <button
               className={`nav-item ${activeView === 'security' ? 'active' : ''}`}
               onClick={() => handleViewChange('security')}
             >
-              <span className="nav-index">04</span>
+              <span className="nav-index">05</span>
               <span className="nav-label">Security Ops</span>
               <span className="nav-led nav-led-amb" />
+            </button>
+            <button
+              className={`nav-item ${activeView === 'tickets' ? 'active' : ''}`}
+              onClick={() => handleViewChange('tickets')}
+            >
+              <span className="nav-index">06</span>
+              <span className="nav-label">Tickets</span>
+              <span className="nav-led nav-led-ok" />
             </button>
           </nav>
 
@@ -365,7 +432,12 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
                 telemetryData={telemetryData}
                 mqttConnected={mqttConnected}
                 now={currentTime}
+                siteData={siteData}
+                token={token}
               />
+            )}
+            {activeView === 'areamap' && (
+              <AreaMap siteData={siteData} token={token} mqttConnected={mqttConnected} />
             )}
             {activeView === 'power' && (
               <PowerChart telemetryData={telemetryData} />
@@ -375,6 +447,9 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
             )}
             {activeView === 'security' && (
               <SecurityAlerts token={token} telemetryData={telemetryData} systemStatus={systemStatus} />
+            )}
+            {activeView === 'tickets' && (
+              <Tickets token={token} />
             )}
           </div>
         </main>

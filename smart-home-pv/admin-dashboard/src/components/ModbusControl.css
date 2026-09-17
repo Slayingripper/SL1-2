@@ -37,6 +37,37 @@
   color: #3fb950;
 }
 
+/* Live link badge — same status-LED language as the Area Map / Plant Overview */
+.badge-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.status-led-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+  background: #6b7280;
+  flex: none;
+}
+
+.status-led-dot.led-ok {
+  background: #3fb950;
+  box-shadow: 0 0 8px rgba(63, 185, 80, 0.8);
+}
+
+.status-led-dot.led-crit {
+  background: #f85149;
+  box-shadow: 0 0 8px rgba(248, 81, 73, 0.8);
+}
+
+.status-led-dot.led-stale {
+  background: #6b7280;
+  opacity: 0.6;
+}
+
 .control-panels {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
@@ -254,6 +285,15 @@
 .access-r {
   color: var(--muted);
   font-family: 'Courier New', monospace;
+}
+
+/* Highlight the safety-critical HALT coil in the register map */
+.reg-critical td {
+  background: rgba(248, 81, 73, 0.08);
+}
+
+.reg-critical .addr-cell {
+  color: #f85149;
 }
 
 .security-notice {

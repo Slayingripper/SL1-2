@@ -1,4 +1,4 @@
-services:
+﻿services:
   pv-controller:
     build: .
     image: scl-challenge-smart-home-pv
@@ -24,6 +24,10 @@ services:
       - ./logs:/opt/pv-controller/logs
       - ${HOME}/Documents:/opt/pv-controller/Documents
       - ${HOME}/smart-home-pv-logs:/opt/pv-controller/home-logs
+      # Serve the freshly-built dashboard bundle from the host so front-end
+      # changes appear on a browser refresh (run `npm run build:watch`) without
+      # rebuilding the image. Remove this line to serve the image-baked bundle.
+      - ./admin-dashboard/dist:/opt/pv-controller/admin-dashboard/dist
     logging:
       driver: json-file
       options:
@@ -43,7 +47,7 @@ services:
       playground-net:
         ipv4_address: 172.20.0.66
     ports:
-      - "1884:1883"  # MQTT broker on host 1884 to avoid conflicts
+      - "1913:1883"  # MQTT broker on host 1913 (1884 falls in Windows Hyper-V excluded range 1803-1902)
       - "9001:9001"  # WebSocket for React dashboard
     volumes:
       - ./mosquitto-config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
@@ -69,6 +73,7 @@ services:
         ipv4_address: 172.20.0.71
     environment:
       - MQTT_HOST=mosquitto
+      - TZ=Asia/Nicosia
     volumes:
       - ./logs:/opt/pv-controller/logs
     logging:
@@ -116,6 +121,7 @@ services:
         ipv4_address: 172.20.0.73
     environment:
       - MQTT_HOST=mosquitto
+      - TZ=Asia/Nicosia
     volumes:
       - ./logs:/opt/pv-controller/logs
     logging:
@@ -124,6 +130,113 @@ services:
         max-size: "5m"
         max-file: "2"
     command: ["python","noise_generator.py","--seed"]
+  # --- Area map site feeders: one container feeds one site with power ----
+  feeder-house-1:
+    build:
+      context: ./tools/noise
+    image: scl-challenge-smart-home-pv-site-feeder
+    container_name: scl-feeder-house-1
+    hostname: scl-feeder-house-1
+    restart: unless-stopped
+    networks:
+      playground-net:
+        ipv4_address: 172.20.0.81
+    environment:
+      - MQTT_HOST=mosquitto
+      - TZ=Asia/Nicosia
+    command: ["python", "noise_generator.py", "--site", "house-1"]
+    depends_on:
+      - mosquitto
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+  feeder-house-2:
+    build:
+      context: ./tools/noise
+    image: scl-challenge-smart-home-pv-site-feeder
+    container_name: scl-feeder-house-2
+    hostname: scl-feeder-house-2
+    restart: unless-stopped
+    networks:
+      playground-net:
+        ipv4_address: 172.20.0.82
+    environment:
+      - MQTT_HOST=mosquitto
+      - TZ=Asia/Nicosia
+    command: ["python", "noise_generator.py", "--site", "house-2"]
+    depends_on:
+      - mosquitto
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+  feeder-house-3:
+    build:
+      context: ./tools/noise
+    image: scl-challenge-smart-home-pv-site-feeder
+    container_name: scl-feeder-house-3
+    hostname: scl-feeder-house-3
+    restart: unless-stopped
+    networks:
+      playground-net:
+        ipv4_address: 172.20.0.83
+    environment:
+      - MQTT_HOST=mosquitto
+      - TZ=Asia/Nicosia
+    command: ["python", "noise_generator.py", "--site", "house-3"]
+    depends_on:
+      - mosquitto
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+  feeder-pv-plant:
+    build:
+      context: ./tools/noise
+    image: scl-challenge-smart-home-pv-site-feeder
+    container_name: scl-feeder-pv-plant
+    hostname: scl-feeder-pv-plant
+    restart: unless-stopped
+    networks:
+      playground-net:
+        ipv4_address: 172.20.0.84
+    environment:
+      - MQTT_HOST=mosquitto
+      - TZ=Asia/Nicosia
+    command: ["python", "noise_generator.py", "--site", "pv-plant"]
+    depends_on:
+      - mosquitto
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+  feeder-army-base:
+    build:
+      context: ./tools/noise
+    image: scl-challenge-smart-home-pv-site-feeder
+    container_name: scl-feeder-army-base
+    hostname: scl-feeder-army-base
+    restart: unless-stopped
+    networks:
+      playground-net:
+        ipv4_address: 172.20.0.85
+    environment:
+      - MQTT_HOST=mosquitto
+      - TZ=Asia/Nicosia
+    command: ["python", "noise_generator.py", "--site", "army-base"]
+    depends_on:
+      - mosquitto
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
   replayer:
     build:
       context: ./tools/replayer
