@@ -4,7 +4,7 @@ import './Login.css';
 import { logAdminActivity, useAdminActivityCapture } from '../utils/activityLogger';
 
 interface LoginProps {
-  onLoginSuccess: (token: string) => void;
+  onLoginSuccess: (token: string, role?: 'admin' | 'blueteam') => void;
 }
 
 const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
@@ -39,6 +39,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
 
       if (response.data.token) {
         localStorage.setItem('pv_admin_token', response.data.token);
+        localStorage.setItem('pv_admin_role', response.data.role || 'admin');
         void logAdminActivity({
           action: 'login_success',
           eventType: 'authentication',
@@ -47,9 +48,10 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
           actor: username,
           details: {
             outcome: 'success',
+            role: response.data.role || 'admin',
           },
         }, response.data.token);
-        onLoginSuccess(response.data.token);
+        onLoginSuccess(response.data.token, response.data.role || 'admin');
       } else {
         setError('Invalid response from server');
       }

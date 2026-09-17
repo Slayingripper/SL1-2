@@ -1,3 +1,24 @@
+/* ============================================================
+   PV SCADA HMI — Industrial control-room design system
+   ============================================================ */
+:root {
+  --bg: #101418;
+  --bg-deep: #0a0d10;
+  --panel: #181e24;
+  --panel-2: #12171c;
+  --border: #2a333c;
+  --border-strong: #39434d;
+  --text: #d7dee6;
+  --muted: #7c8794;
+  --accent: #ffb000;          /* industrial amber */
+  --accent-dim: rgba(255, 176, 0, 0.12);
+  --ok: #3fb950;
+  --warn: #ffb000;
+  --crit: #ff4545;
+  --info: #4aa3ff;
+  --mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, 'Courier New', monospace;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -9,16 +30,20 @@ body {
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: #0a192f;
-  color: #ccd6f6;
+  background: var(--bg-deep);
+  color: var(--text);
+  font-size: 14px;
 }
 
 code {
-  font-family: 'Courier New', Courier, monospace;
+  font-family: var(--mono);
 }
 
 .App {
   min-height: 100vh;
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.008) 0 1px, transparent 1px 3px),
+    var(--bg);
 }
 
 /* Scrollbar styling */
@@ -28,20 +53,20 @@ code {
 }
 
 ::-webkit-scrollbar-track {
-  background: #0a192f;
+  background: var(--bg-deep);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(100, 255, 218, 0.3);
-  border-radius: 5px;
+  background: var(--border-strong);
+  border-radius: 2px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 255, 218, 0.5);
+  background: var(--accent);
 }
 
 /* Selection styling */
 ::selection {
-  background: rgba(100, 255, 218, 0.3);
-  color: #64ffda;
+  background: rgba(255, 176, 0, 0.3);
+  color: #fff;
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import './NotificationPopup.css';
 import { logAdminActivity } from '../utils/activityLogger';
 
@@ -13,53 +13,44 @@ interface Notification {
   read: boolean;
 }
 
+const AUTO_DISMISS_MS = 20000;
+
+// Blue-team alert tier controls which severities produce real-time popups.
+const TIER_RANK: Record<string, number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+  critical: 3,
+};
+
 const NotificationPopup = () => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [shownNotifications, setShownNotifications] = useState<Set<number>>(new Set());
-  const shownNotificationsRef = useRef<Set<number>>(new Set());
+  // Track handled ids in a ref so polling, rendering and auto-dismiss timers
+  // never fight over duplicates
+  const handledIds = useRef<Set<number>>(new Set());
+  const closingIds = useRef<Set<number>>(new Set());
+  const tierRef = useRef<string>('low'); // 'low' = show everything
 
   useEffect(() => {
-    shownNotificationsRef.current = shownNotifications;
-  }, [shownNotifications]);
-
-  useEffect(() => {
-    // Poll for notifications every 8 seconds
-    const checkNotifications = async () => {
+    let alive = true;
+    const loadTier = async () => {
       try {
-        const response = await fetch('/api/notifications');
-        if (!response.ok) return;
-        
-        const data = await response.json();
-        const unreadNotifs = (data.notifications || []).filter((n: Notification) => !n.read);
-
-        unreadNotifs.forEach((notif: Notification) => {
-          if (!shownNotificationsRef.current.has(notif.id)) {
-            setNotifications(prev => [...prev, notif]);
-            setShownNotifications(prev => {
-              const next = new Set(prev);
-              next.add(notif.id);
-              shownNotificationsRef.current = next;
-              return next;
-            });
-            
-            // Auto-dismiss after 30 seconds
-            setTimeout(() => {
-              closeNotification(notif.id);
-            }, 30000);
-          }
-        });
-      } catch (error) {
-        console.debug('Failed to fetch notifications:', error);
+        const resp = await fetch('/api/blueteam/defense_status');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (alive && data?.alert_tier) tierRef.current = data.alert_tier;
+      } catch (e) {
+        /* ignore */
       }
     };
-
-    checkNotifications();
-    const interval = setInterval(checkNotifications, 8000);
-
-    return () => clearInterval(interval);
+    loadTier();
+    const t = setInterval(loadTier, 15000);
+    return () => { alive = false; clearInterval(t); };
   }, []);
 
-  const closeNotification = async (id: number) => {
+  const closeNotification = useCallback(async (id: number) => {
+    if (closingIds.current.has(id)) return; // idempotent close
+    closingIds.current.add(id);
     setNotifications(prev => prev.filter(n => n.id !== id));
     void logAdminActivity({
       action: 'notification_closed',
@@ -70,14 +61,54 @@ const NotificationPopup = () => {
         notification_id: id,
       },
     });
-    
-    // Mark as read on server
+
+    // Mark as read on server (best effort - a trimmed notification may 404)
     try {
       await fetch(`/api/notifications/${id}/read`, { method: 'POST' });
     } catch (error) {
       console.debug('Failed to mark notification as read:', error);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    let timer: number | undefined;
+    const checkNotifications = async () => {
+      // Pause polling while the tab is hidden to save CPU/network
+      if (document.hidden) return;
+      try {
+        const response = await fetch('/api/notifications');
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const threshold = TIER_RANK[tierRef.current] ?? 0;
+        const unreadNotifs = (data.notifications || []).filter((n: Notification) => {
+          if (n.read || handledIds.current.has(n.id)) return false;
+          // Respect blue-team notification tier (drop low-priority popups)
+          const typeKey = (n.type || 'low').toLowerCase();
+          const rank = TIER_RANK[typeKey];
+          if (rank !== undefined && rank < threshold) return false;
+          return true;
+        });
+
+        for (const notif of unreadNotifs) {
+          handledIds.current.add(notif.id);
+          setNotifications(prev =>
+            prev.some(p => p.id === notif.id) ? prev : [...prev, notif]
+          );
+          window.setTimeout(() => {
+            void closeNotification(notif.id);
+          }, AUTO_DISMISS_MS);
+        }
+      } catch (error) {
+        console.debug('Failed to fetch notifications:', error);
+      }
+    };
+
+    checkNotifications();
+    timer = window.setInterval(checkNotifications, 8000);
+
+    return () => clearInterval(timer);
+  }, [closeNotification]);
 
   const handleLinkClick = (id: number, link?: string) => {
     let externalLink = link || '';
@@ -89,6 +120,7 @@ const NotificationPopup = () => {
         // Check if this is an internal Docker IP (172.20.x.x)
         if (url.hostname.startsWith('172.20.')) {
           url.hostname = window.location.hostname;
+          url.protocol = window.location.protocol;
           externalLink = url.toString();
         }
       } catch (e) {
@@ -106,7 +138,7 @@ const NotificationPopup = () => {
         destination: externalLink,
       },
     });
-    closeNotification(id);
+    void closeNotification(id);
   };
 
   return (
@@ -116,7 +148,7 @@ const NotificationPopup = () => {
           <div className="notification-header">
             <span className="notification-icon">⚠️</span>
             <span className="notification-title">{notif.title}</span>
-            <button 
+            <button
               className="notification-close"
               onClick={() => closeNotification(notif.id)}
             >

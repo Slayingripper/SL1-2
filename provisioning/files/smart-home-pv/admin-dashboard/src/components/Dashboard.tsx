@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import mqtt from 'mqtt';
+import axios from 'axios';
 import SystemOverview from './SystemOverview';
 import PowerChart from './PowerChart';
 import ModbusControl from './ModbusControl';
-import Diagnostics from './Diagnostics';
 import SecurityAlerts from './SecurityAlerts';
 import NotificationPopup from './NotificationPopup';
 import ContainerSwitcher from './ContainerSwitcher';
@@ -18,7 +18,11 @@ interface DashboardProps {
 interface MQTTStatus {
   status: string;
   session: string;
-  power: number;
+  power?: number;
+  power_kw?: number;
+  voltage_v?: number;
+  current_a?: number;
+  uptime_s?: number;
   timestamp?: number;
 }
 
@@ -29,71 +33,136 @@ interface MQTTTelemetry {
   current_a?: number;
 }
 
+interface ActiveDefense {
+  telemetry_validation: boolean;
+  telemetry_min_kw: number;
+  telemetry_max_kw: number;
+}
+
 const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
   const [activeView, setActiveView] = useState('overview');
   const [mqttConnected, setMqttConnected] = useState(false);
   const [systemStatus, setSystemStatus] = useState<MQTTStatus | null>(null);
   const [telemetryData, setTelemetryData] = useState<MQTTTelemetry[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [defense, setDefense] = useState<ActiveDefense>({
+    telemetry_validation: false,
+    telemetry_min_kw: -2,
+    telemetry_max_kw: 10,
+  });
+  const defenseRef = useRef(defense);
+  useEffect(() => { defenseRef.current = defense; }, [defense]);
 
   useAdminActivityCapture(`dashboard/${activeView}`, token);
 
+  // Mirrors the blue-team Telemetry Validation control: the operator console
+  // subscribes to MQTT directly, so it re-applies the same bounds as the
+  // controller to guarantee attacker-injected readings never reach the charts.
   useEffect(() => {
-    // Connect to MQTT broker - if local, use localhost, otherwise connect to the host running the dashboard
-    const mqttHost = window.location.hostname;
-    const mqttUrl = (mqttHost === 'localhost' || mqttHost === '127.0.0.1')
-      ? 'ws://localhost:9001'
-      : `ws://${mqttHost}:9001`;
-    
-    const client = mqtt.connect(mqttUrl);
-
-    client.on('connect', () => {
-      setMqttConnected(true);
-      void logAdminActivity({
-        action: 'mqtt_connected',
-        eventType: 'system',
-        page: 'dashboard',
-        target: 'mqtt-broker',
-        details: {
-          status: 'connected',
-          destination: mqttUrl,
-        },
-      }, token);
-      client.subscribe('pv/status');
-      client.subscribe('pv/telemetry');
-    });
-
-    client.on('message', (topic, message) => {
+    let alive = true;
+    const poll = async () => {
       try {
-        const data = JSON.parse(message.toString());
-        
-        if (topic === 'pv/status') {
-          setSystemStatus(data);
-        } else if (topic === 'pv/telemetry') {
-          setTelemetryData(prev => {
-            const newData = [...prev, data];
-            // Keep last 30 data points to reduce browser memory footprint
-            return newData.slice(-30);
+        const resp = await axios.get('/api/blueteam/defense_status');
+        const d = resp.data || {};
+        if (alive) {
+          setDefense({
+            telemetry_validation: !!d.telemetry_validation,
+            telemetry_min_kw: typeof d.telemetry_min_kw === 'number' ? d.telemetry_min_kw : -2,
+            telemetry_max_kw: typeof d.telemetry_max_kw === 'number' ? d.telemetry_max_kw : 10,
           });
         }
       } catch (error) {
-        console.error('Error parsing MQTT message:', error);
+        console.debug('Failed to fetch defense status:', error);
       }
-    });
+    };
+    poll();
+    const iv = setInterval(poll, 10000);
+    return () => { alive = false; clearInterval(iv); };
+  }, []);
 
-    client.on('error', (error) => {
-      console.error('MQTT connection error:', error);
-      setMqttConnected(false);
-      void logAdminActivity({
-        action: 'mqtt_connection_error',
-        eventType: 'system',
-        page: 'dashboard',
-        target: 'mqtt-broker',
-        details: {
-          status: 'error',
-        },
-      }, token);
-    });
+  useEffect(() => {
+    // Connect to the MQTT broker over WebSockets. Depending on where the
+    // browser runs, the broker is reachable under different names:
+    //  - from the host / LAN: the published port 9001 on the accessed hostname
+    //  - from inside the docker network: the "mosquitto" service name
+    // Try candidates in order until one connects.
+    const hostname = window.location.hostname;
+    const candidates = Array.from(new Set([
+      `${hostname === '' ? 'localhost' : hostname}`,
+      'mosquitto',
+      'localhost',
+    ])).map(h => `ws://${h}:9001`);
+
+    let client: ReturnType<typeof mqtt.connect> | null = null;
+    let disposed = false;
+    let idx = 0;
+
+    const connectNext = () => {
+      if (disposed || idx >= candidates.length) return;
+      const mqttUrl = candidates[idx++];
+      let everConnected = false;
+      client = mqtt.connect(mqttUrl, { reconnectPeriod: 0, connectTimeout: 4000 });
+
+      client.on('connect', () => {
+        if (disposed) return;
+        setMqttConnected(true);
+        void logAdminActivity({
+          action: 'mqtt_connected',
+          eventType: 'system',
+          page: 'dashboard',
+          target: 'mqtt-broker',
+          details: {
+            status: 'connected',
+            destination: mqttUrl,
+          },
+        }, token);
+        client?.subscribe('pv/status');
+        client?.subscribe('pv/telemetry');
+      });
+
+      client.on('message', (_topic, message) => {
+        try {
+          const data = JSON.parse(message.toString());
+
+          if (_topic === 'pv/status') {
+            setSystemStatus(data);
+          } else if (_topic === 'pv/telemetry') {
+            const dv = defenseRef.current;
+            if (dv.telemetry_validation) {
+              const raw = data.power_kw !== undefined ? data.power_kw : data.power;
+              const ok = typeof raw === 'number' && raw >= dv.telemetry_min_kw && raw <= dv.telemetry_max_kw;
+              if (!ok) {
+                console.debug('Telemetry validation dropped reading from direct MQTT', data);
+                return;
+              }
+            }
+            setTelemetryData(prev => {
+              const newData = [...prev, data];
+              // Keep last 60 data points for the charts
+              return newData.slice(-60);
+            });
+          }
+        } catch (error) {
+          console.error('Error parsing MQTT message:', error);
+        }
+      });
+
+      client.on('error', (error) => {
+        console.debug(`MQTT endpoint failed (${mqttUrl}):`, error.message);
+      });
+
+      // Never connected successfully -> fall back to the next candidate
+      client.on('close', () => {
+        if (disposed) return;
+        setMqttConnected(false);
+        if (!everConnected && idx < candidates.length) {
+          client?.end(true);
+          connectNext();
+        }
+      });
+    };
+
+    connectNext();
 
     // Update clock every 5 seconds to reduce unnecessary re-renders
     const clockInterval = setInterval(() => {
@@ -101,10 +170,35 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
     }, 5000);
 
     return () => {
-      client.end();
+      disposed = true;
+      client?.end(true);
       clearInterval(clockInterval);
     };
   }, [token]);
+
+  const handleResetPlant = async () => {
+    try {
+      await axios.post('/api/plant/reset', {}, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      void logAdminActivity({
+        action: 'plant_reset',
+        eventType: 'system',
+        page: `dashboard/${activeView}`,
+        target: 'reset-plant-button',
+        details: { outcome: 'success', status: 'RUNNING' },
+      }, token);
+      // MQTT status republishes shortly; also refresh from HTTP so the badge
+      // flips back immediately.
+      try {
+        const { data } = await axios.get('/api/status');
+        setSystemStatus(prev => ({ ...(prev || ({} as MQTTStatus)), status: data.status }));
+      } catch (e) { /* ignore */ }
+    } catch (error: any) {
+      console.error('Failed to reset plant:', error);
+      alert('❌ Failed to reset plant.');
+    }
+  };
 
   const handleLogout = () => {
     void logAdminActivity({
@@ -116,7 +210,12 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
         outcome: 'initiated',
       },
     }, token);
+    // If blue-team defenses are active, reset them on logoff (training scenario)
+    void axios.post('/api/blueteam/logout', {}, {
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch(() => { /* best effort */ });
     localStorage.removeItem('pv_admin_token');
+    localStorage.removeItem('pv_admin_role');
     onLogout();
   };
 
@@ -135,7 +234,7 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
   };
 
   const formatTime = (date: Date) => {
-    return date.toLocaleTimeString('en-US', { 
+    return date.toLocaleTimeString('en-US', {
       hour12: false,
       hour: '2-digit',
       minute: '2-digit',
@@ -151,6 +250,17 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
     });
   };
 
+  const halted = String(systemStatus?.status || '').toUpperCase() === 'HALTED';
+  const healthPct = halted ? 18 : mqttConnected ? 94 + (Math.abs(Math.round(systemStatus?.power_kw ?? 0) * 7) % 5) : 62;
+  const uptimeStr = (() => {
+    const s = Number(systemStatus?.uptime_s ?? 0);
+    if (!s) return '—';
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return d > 0 ? `${d}d ${h}h ${m}m` : `${h}h ${m}m`;
+  })();
+
   return (
     <div className="dashboard">
       {/* Notification Pop-ups */}
@@ -163,12 +273,13 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
       <header className="dashboard-header">
         <div className="header-left">
           <div className="header-logo">
-            <span className="logo-icon">⚡</span>
+            <span className="logo-mark">PV</span>
             <div className="logo-text">
               <h1>PV SCADA HMI</h1>
-              <p>Solar Energy Management System</p>
+              <p>UNIT CY-LIM-042 · LIMASSOL SOLAR PLANT</p>
             </div>
           </div>
+          <div className="hazard-strip" />
         </div>
         
         <div className="header-center">
@@ -182,12 +293,16 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
           <div className="connection-status">
             <span className={`status-dot ${mqttConnected ? 'connected' : 'disconnected'}`}></span>
             <span className="status-text">
-              {mqttConnected ? 'MQTT Connected' : 'MQTT Disconnected'}
+              {mqttConnected ? 'TELEMETRY LINK' : 'LINK FAULT'}
             </span>
           </div>
+          {halted && (
+            <button className="reset-plant-button" onClick={handleResetPlant}>
+              ♻️ RESET PLANT
+            </button>
+          )}
           <button className="logout-button" onClick={handleLogout}>
-            <span>🚪</span>
-            Logout
+            LOGOUT
           </button>
         </div>
       </header>
@@ -199,36 +314,33 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
               className={`nav-item ${activeView === 'overview' ? 'active' : ''}`}
               onClick={() => handleViewChange('overview')}
             >
-              <span className="nav-icon">📊</span>
-              <span className="nav-label">System Overview</span>
+              <span className="nav-index">01</span>
+              <span className="nav-label">Plant Overview</span>
+              <span className={`nav-led nav-led-ok`} />
             </button>
             <button 
               className={`nav-item ${activeView === 'power' ? 'active' : ''}`}
               onClick={() => handleViewChange('power')}
             >
-              <span className="nav-icon">⚡</span>
+              <span className="nav-index">02</span>
               <span className="nav-label">Power Analytics</span>
+              <span className={`nav-led nav-led-ok`} />
             </button>
             <button 
               className={`nav-item ${activeView === 'modbus' ? 'active' : ''}`}
               onClick={() => handleViewChange('modbus')}
             >
-              <span className="nav-icon">🔧</span>
+              <span className="nav-index">03</span>
               <span className="nav-label">Modbus Control</span>
-            </button>
-            <button 
-              className={`nav-item ${activeView === 'diagnostics' ? 'active' : ''}`}
-              onClick={() => handleViewChange('diagnostics')}
-            >
-              <span className="nav-icon">🔍</span>
-              <span className="nav-label">Diagnostics</span>
+              <span className={`nav-led ${halted ? 'nav-led-crit' : 'nav-led-ok'}`} />
             </button>
             <button 
               className={`nav-item ${activeView === 'security' ? 'active' : ''}`}
               onClick={() => handleViewChange('security')}
             >
-              <span className="nav-icon">🛡️</span>
-              <span className="nav-label">Security Alerts</span>
+              <span className="nav-index">04</span>
+              <span className="nav-label">Security Ops</span>
+              <span className="nav-led nav-led-amb" />
             </button>
           </nav>
 
@@ -237,9 +349,9 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
               <div className="health-indicator">
                 <span className="health-label">System Health</span>
                 <div className="health-bar">
-                  <div className="health-fill" style={{width: '94%'}}></div>
+                  <div className={`health-fill ${halted ? 'health-halted' : ''}`} style={{width: `${healthPct}%`}}></div>
                 </div>
-                <span className="health-value">94%</span>
+                <span className="health-value">{healthPct}%</span>
               </div>
             </div>
           </div>
@@ -248,10 +360,11 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
         <main className="main-content">
           <div className="content-wrapper">
             {activeView === 'overview' && (
-              <SystemOverview 
-                systemStatus={systemStatus} 
+              <SystemOverview
+                systemStatus={systemStatus}
                 telemetryData={telemetryData}
                 mqttConnected={mqttConnected}
+                now={currentTime}
               />
             )}
             {activeView === 'power' && (
@@ -260,11 +373,8 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
             {activeView === 'modbus' && (
               <ModbusControl token={token} />
             )}
-            {activeView === 'diagnostics' && (
-              <Diagnostics token={token} systemStatus={systemStatus} />
-            )}
             {activeView === 'security' && (
-              <SecurityAlerts token={token} telemetryData={telemetryData} />
+              <SecurityAlerts token={token} telemetryData={telemetryData} systemStatus={systemStatus} />
             )}
           </div>
         </main>
@@ -274,12 +384,15 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
         <div className="footer-info">
           <span>PV Controller v2.4.1</span>
           <span>|</span>
-          <span>Uptime: 47d 12h 34m</span>
+          <span>Uptime: {uptimeStr}</span>
           <span>|</span>
-          <span>Region: Cyprus</span>
+          <span>Site: CY-LIM-042 · Cyprus</span>
         </div>
         <div className="footer-status">
-          <span className="status-badge status-operational">All Systems Operational</span>
+          <span className="footer-led" />
+          <span className={`status-badge ${halted ? 'status-halted' : 'status-operational'}`}>
+            {halted ? 'PLANT HALTED — INCIDENT ACTIVE' : 'ALL SYSTEMS OPERATIONAL'}
+          </span>
         </div>
       </footer>
     </div>

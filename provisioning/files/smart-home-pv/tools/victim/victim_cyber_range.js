@@ -4,6 +4,7 @@ const net = require('net');
 
 const PV_URL = process.env['PV_URL'] || 'http://pv-controller';
 const CHECK_EMAIL_INTERVAL = parseInt(process.env['CHECK_EMAIL_INTERVAL'] || '30') * 1000;
+const ROUTINE_WORK_INTERVAL = parseInt(process.env['ROUTINE_WORK_INTERVAL'] || '300') * 1000;
 const VICTIM_EMAIL = process.env['VICTIM_EMAIL'] || 'admin@pv-controller.local';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -23,35 +24,69 @@ class RealisticVictim {
         this.browser = null;
         this.page = null;
         this.credentials = {
-            username: 'admin',
-            password: 'PV-Sec-2024!Admin'  // Strong password
+            // Must match the live admin credential so credentials leaked to a
+            // phishing page are actually usable against the real HMI.
+            username: process.env['VICTIM_ADMIN_USERNAME'] || 'admin',
+            password: process.env['VICTIM_ADMIN_PASSWORD'] || 'admin123'
         };
         this.clickedLinks = new Set();
+        this.lastRoutineWork = 0;
     }
     
     async init() {
         console.log('[Victim] Initializing browser...');
-        
+
         this.browser = await puppeteer.launch({
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage'
+                '--disable-dev-shm-usage',
+                // CPU/GPU friendly flags for lightweight headless operation
+                '--disable-gpu',
+                '--disable-software-rasterizer',
+                '--mute-audio',
+                '--no-first-run',
+                '--no-zygote',
+                '--disable-background-networking',
+                '--disable-breakpad',
+                '--disable-component-update',
+                '--disable-default-apps',
+                '--disable-domain-reliability',
+                '--disable-extensions',
+                '--disable-features=PaintHolding,Translate,BackForwardCache',
+                '--disable-hang-monitor',
+                '--disable-ipc-flooding-protection',
+                '--disable-renderer-backgrounding',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-client-side-phishing-detection',
+                '--disable-sync',
+                '--metrics-recording-only',
+                '--force-color-profile=srgb',
+                '--js-flags=--max-old-space-size=128'
             ],
             headless: true
         });
-        
+
         this.page = await this.browser.newPage();
-        
+
+        // Block heavy resources - images/fonts/media are not needed for the
+        // legitimacy heuristics (which only inspect DOM structure + CSS presence)
+        await this.page.setRequestInterception(true);
+        this.page.on('request', (req) => {
+            const type = req.resourceType();
+            if (type === 'image' || type === 'media' || type === 'font') {
+                req.abort().catch(() => {});
+            } else {
+                req.continue().catch(() => {});
+            }
+        });
+
         // Set realistic user agent
         await this.page.setUserAgent(
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
             '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         );
-        
-        // Log page console messages
-        this.page.on('console', msg => console.log('[Page]', msg.text()));
-        
+
         console.log('[Victim] Browser ready');
     }
     
@@ -239,12 +274,14 @@ class RealisticVictim {
          */
         try {
             console.log(`[Victim] Navigating to: ${email.link}`);
-            
+
             await this.page.goto(email.link, {
-                waitUntil: 'networkidle2',
-                timeout: 15000
+                waitUntil: 'domcontentloaded',
+                timeout: 20000
             });
-            
+            // Give SPA pages a short, bounded settle window instead of networkidle
+            await sleep(2000);
+
             console.log('[Victim] Page loaded, evaluating authenticity...');
             
             // Evaluate page legitimacy
@@ -386,20 +423,32 @@ class RealisticVictim {
     async routineWork() {
         /**
          * Simulate normal work activities (browsing admin dashboard)
+         * Rate limited to at most one visit per ROUTINE_WORK_INTERVAL to keep CPU low
          */
+        const now = Date.now();
+        if (this.lastRoutineWork && (now - this.lastRoutineWork) < ROUTINE_WORK_INTERVAL) {
+            return;
+        }
+        this.lastRoutineWork = now;
+
         try {
             console.log('[Victim] Performing routine work...');
-            
+
             await this.page.goto(`${PV_URL}/admin`, {
-                waitUntil: 'networkidle2',
-                timeout: 15000
+                waitUntil: 'domcontentloaded',
+                timeout: 20000
             });
-            
+
             console.log('[Victim] Viewing admin dashboard');
-            
-            // Wait a bit (simulate reading)
-            await sleep(5000);
-            
+
+            // Short bounded reading time (the live dashboard keeps websockets
+            // open, so a long stay only wastes CPU in the background renderer)
+            await sleep(4000);
+
+            // Navigate away so the heavy dashboard page is destroyed and its
+            // renderer/websocket connections are released
+            await this.page.goto('about:blank', {waitUntil: 'domcontentloaded', timeout: 5000}).catch(() => {});
+
         } catch (error) {
             console.error('[Victim] Error during routine work:', error.message);
         }
@@ -419,9 +468,9 @@ class RealisticVictim {
             try {
                 // Check email
                 await this.checkEmail();
-                
-                // Do some routine work
-                if (Math.random() < 0.3) {  // 30% chance
+
+                // Do some routine work (rate limited internally)
+                if (Math.random() < 0.3) {  // 30% chance per cycle
                     await this.routineWork();
                 }
                 

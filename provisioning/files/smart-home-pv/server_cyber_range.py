@@ -20,6 +20,8 @@ import socket
 import secrets
 import hashlib
 import hmac
+import math
+import random
 import threading
 import time
 import subprocess
@@ -172,6 +174,7 @@ class ChallengeState:
         self.anomalous_data = []
         self.blocked_ips = {}  # ip -> {blocked_at, blocked_by, reason}
         self.notifications = []  # Pop-up notifications for victim dashboard
+        self.notification_seq = 0  # Monotonic counter so IDs never collide after trimming
         
         # Use RLock (reentrant lock) since add_failed_login calls add_security_event
         # while holding the lock, which would deadlock with a regular Lock
@@ -251,6 +254,23 @@ class ChallengeState:
             # Keep last 100 events
             if len(self.security_events) > 100:
                 self.security_events = self.security_events[-100:]
+            # Raise an HMI popup notification so the operator sees it immediately.
+            # The notification 'type' mirrors the severity so the blue-team alert
+            # tier filter decides which media produce audible/visual popups.
+            try:
+                self.notification_seq += 1
+                self.notifications.append({
+                    'id': self.notification_seq,
+                    'timestamp': event['timestamp'],
+                    'type': severity.lower(),
+                    'title': f"{category}: {message}",
+                    'message': details or message,
+                    'read': False,
+                })
+                if len(self.notifications) > 20:
+                    self.notifications = self.notifications[-20:]
+            except Exception:
+                logger.exception("Failed to raise HMI notification for security event")
             # Log events for visibility in container logs
             try:
                 logger.warning(f"Security Event [{severity}] {category}: {message} - {details} (source: {source})")
@@ -438,8 +458,80 @@ state = ChallengeState()
 # SYSTEM CONFIGURATION
 # ============================================================================
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin123"  # Simpler password for brute force demo
+ADMIN_PASSWORD = "admin123"
 WIFI_PASSWORD = "super-secret-123"     # Discovered via /wifi_scan, but NOT admin password
+
+# Blue team operator credentials
+BLUETEAM_USERNAME = "blueteam"
+BLUETEAM_PASSWORD = "blueTeam123"
+
+# Persist a user-chosen blue-team password across restarts. Loaded at startup,
+# written by the "change password" endpoint. Stored in the same directory so it
+# survives container restarts unless the state volume is wiped.
+BLUETEAM_CRED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'blueteam_credentials.json')
+
+def _load_blueteam_password():
+    global BLUETEAM_PASSWORD
+    try:
+        if os.path.exists(BLUETEAM_CRED_FILE):
+            with open(BLUETEAM_CRED_FILE, 'r') as f:
+                data = json.load(f)
+            stored = data.get('password')
+            if stored and isinstance(stored, str) and len(stored) >= 6:
+                BLUETEAM_PASSWORD = stored
+    except Exception:
+        logger.exception('Failed to load blue-team credentials')
+
+def _save_blueteam_password(password):
+    try:
+        with open(BLUETEAM_CRED_FILE, 'w') as f:
+            json.dump({'username': BLUETEAM_USERNAME, 'password': password}, f)
+    except Exception:
+        logger.exception('Failed to persist blue-team credentials')
+
+_load_blueteam_password()
+
+# ── Blue-team defense state ──────────────────────────────────────────────
+# Populated when the defender logs in; cleared on logout so the system
+# reverts to insecure defaults — matching the training scenario design.
+BLUETEAM_DEFAULT_SETTINGS = {
+    'login_rate_limit': False,
+    'rate_limit_per_minute': 5,
+    'modbus_write_restricted': False,
+    'telemetry_validation': False,
+    'telemetry_max_power_kw': 10.0,
+    'telemetry_min_power_kw': -2.0,
+    'xss_protection': False,
+    'ip_whitelist_enabled': False,
+    'ip_whitelist': [],
+    'admin_session_timeout_minutes': 30,
+    'alert_notification_tier': 'critical',
+    'blocked_ips_manual': [],
+    'ip_blacklist_enabled': False,
+    'ip_blacklist': [],
+    'inactivity_timeout_minutes': 5,
+}
+
+# Built-in mitigation signatures used when the blue team enables a control.
+# These replace any user-written code: enabling a control applies the canned
+# detection rule directly so the training stays hands-on without writing code.
+XSS_BLOCK_PATTERNS = [
+    re.compile(r'<\s*script', re.I),
+    re.compile(r'on\w+\s*=', re.I),
+    re.compile(r'javascript\s*:', re.I),
+    re.compile(r'<\s*(iframe|object|embed|svg)\b', re.I),
+    re.compile(r'--\s*-', re.I),
+    re.compile(r'union\s+select', re.I),
+]
+
+blueteam_defense = {
+    'active': False,
+    'active_since': 0.0,
+    'settings': dict(BLUETEAM_DEFAULT_SETTINGS),
+    'last_activity': time.time(),
+    'active_token': None,
+}
+_blueteam_login_ts: list = []   # timestamps for rate-limit window
 
 pv_status = {
     "status": "RUNNING",
@@ -448,6 +540,44 @@ pv_status = {
     "current_a": 13.3,
     "last_update": time.time()
 }
+
+SERVER_STARTED_AT = time.time()
+
+# ============================================================================
+# PV OUTPUT SIMULATION
+# Realistic residential solar curve: follows daylight hours with smooth cloud
+# noise so dashboards show believable production instead of a flat value.
+# ============================================================================
+
+PV_CAPACITY_KW = 4.8
+SUNRISE_HOUR = 6.5   # local time
+SUNSET_HOUR = 19.5   # local time
+_cloud_state = {'value': 0.0, 'last': 0.0}
+
+def solar_elevation_factor(now=None):
+    """Return 0..1 daylight factor for the simulated site."""
+    lt = time.localtime(now if now is not None else time.time())
+    hours = lt.tm_hour + lt.tm_min / 60.0 + lt.tm_sec / 3600.0
+    if hours <= SUNRISE_HOUR or hours >= SUNSET_HOUR:
+        return 0.0
+    x = (hours - SUNRISE_HOUR) / (SUNSET_HOUR - SUNRISE_HOUR)
+    return max(0.0, math.sin(math.pi * x) ** 1.35)
+
+def compute_pv_power(now=None):
+    """Simulated PV output in kW (daylight curve + slow cloud noise)."""
+    if pv_status.get('status') != 'RUNNING':
+        return 0.0
+    tnow = now if now is not None else time.time()
+    elev = solar_elevation_factor(tnow)
+    if elev <= 0.0:
+        return round(random.uniform(0.0, 0.04), 3)
+    # Smooth cloud noise: bounded random walk sampled at most once per second
+    if tnow - _cloud_state['last'] >= 1.0 or _cloud_state['last'] == 0.0:
+        _cloud_state['value'] += random.uniform(-0.045, 0.045)
+        _cloud_state['value'] = max(-0.14, min(0.14, _cloud_state['value']))
+        _cloud_state['last'] = tnow
+    base = PV_CAPACITY_KW * elev * (1.0 + _cloud_state['value'])
+    return round(max(0.0, base), 3)
 
 # Compatibility state for legacy helper tooling
 replayer_state = {'running': False, 'last_played': None}
@@ -461,12 +591,13 @@ MQTT_SESSION_TOKEN = f"mqtt-session-{secrets.token_hex(8)}"
 MQTT_TELEMETRY_INTERVAL = max(1.0, float(os.getenv('MQTT_TELEMETRY_INTERVAL', '3')))
 MQTT_STATUS_INTERVAL = max(10, int(os.getenv('MQTT_STATUS_INTERVAL', '30')))
 
-def generate_token(username, token_type='api', expires_in=1800, ip_address=None):
+def generate_token(username, token_type='api', expires_in=1800, ip_address=None, role=None):
     """Generate token with expiration (30 min default)"""
     token = secrets.token_urlsafe(32)
     active_tokens[token] = {
         'username': username,
         'type': token_type,
+        'role': role or token_type,
         'expires': time.time() + expires_in,
         'created': time.time()
     }
@@ -474,6 +605,157 @@ def generate_token(username, token_type='api', expires_in=1800, ip_address=None)
     if ip_address:
         active_tokens[token]['ip'] = ip_address
     return token
+
+
+def touch_blueteam_activity():
+    """Record blue-team activity so the auto-logout timer never fires while busy."""
+    if blueteam_defense['active']:
+        blueteam_defense['last_activity'] = time.time()
+
+
+def blueteam_inactivity_expired():
+    """Return True if the blue team has been inactive beyond the timeout."""
+    if not blueteam_defense['active']:
+        return False
+    timeout_min = int(blueteam_defense['settings'].get('inactivity_timeout_minutes', 5))
+    return (time.time() - blueteam_defense['last_activity']) > timeout_min * 60
+
+
+def blueteam_auto_logout():
+    """Force the blue-team session to end and reset all defenses."""
+    blueteam_defense['active'] = False
+    blueteam_defense['active_since'] = 0.0
+    blueteam_defense['settings'] = dict(BLUETEAM_DEFAULT_SETTINGS)
+    _blueteam_login_ts.clear()
+    token = blueteam_defense.get('active_token')
+    if token and token in active_tokens:
+        del active_tokens[token]
+    blueteam_defense['active_token'] = None
+    logger.info("🔒 Blue-team session auto-expired (inactivity) — defenses reset")
+    try:
+        write_action_log('blueteam_auto_logout',
+                         actor='blueteam', details={'reason': 'inactivity_timeout'})
+    except Exception:
+        pass
+
+
+def ip_matches(ip, allowlist):
+    """Return True if ip matches any exact value or CIDR prefix in allowlist."""
+    for entry in allowlist:
+        entry = str(entry or '').strip()
+        if not entry:
+            continue
+        if entry == ip:
+            return True
+        if '/' in entry:
+            prefix, plen = entry.split('/', 1)
+            try:
+                plen = int(plen)
+            except ValueError:
+                continue
+            if ip.startswith(prefix + '.'):
+                if ip.split('.')[:2] == prefix.split('.')[:2]:
+                    return True
+            try:
+                import ipaddress as _ipa
+                if ip in _ipa.ip_network(entry, strict=False):
+                    return True
+            except Exception:
+                pass
+        elif ip.startswith(entry + '.'):
+            return True
+    return False
+
+
+def is_ip_blacklisted(ip):
+    """Manual IP blacklist check."""
+    settings = blueteam_defense['settings']
+    if not (blueteam_defense['active'] and settings.get('ip_blacklist_enabled')):
+        return False
+    manual = [s.strip() for s in settings.get('ip_blacklist', []) if str(s).strip()]
+    return ip in manual
+
+
+def ip_is_whitelisted(ip):
+    """IP whitelist check against the configured allowlist."""
+    settings = blueteam_defense['settings']
+    if not (blueteam_defense['active'] and settings.get('ip_whitelist_enabled')):
+        return True
+    return ip_matches(ip, settings.get('ip_whitelist', []))
+
+
+def request_has_xss_or_sqli(path, query, body):
+    """Built-in XSS / SQLi signature check (no user code required)."""
+    blob = f"{path} {query} {body}".lower()
+    for pat in XSS_BLOCK_PATTERNS:
+        if pat.search(blob):
+            return True
+    if re.search(r"'\s*(or|and)\s*'?1'?\s*=\s*'?1", blob):
+        return True
+    return False
+
+
+@app.before_request
+def defense_middleware():
+    """Global blue-team defensive middleware applied to /api/ requests."""
+    if not request.path.startswith('/api/'):
+        return None
+    remote = request.remote_addr or ''
+    active = blueteam_defense['active']
+    settings = blueteam_defense['settings']
+    # The login endpoint is always reachable as the recovery path — the
+    # blue team can log back in to fix a misconfiguration even if they
+    # accidentally lock out their own IP.
+    is_login = request.path == '/api/admin/login'
+    # The blue-team control API is likewise always reachable. Otherwise
+    # enabling the IP whitelist/blacklist would block the very request that
+    # saves the setting (self-lockout) and the console could not be recovered.
+    is_control = request.path.startswith('/api/blueteam/')
+    ip_gate_exempt = is_login or is_control
+
+    # ── IP blacklist (manual list) ────────────────────────────────────────
+    if (active and settings.get('ip_blacklist_enabled')
+            and is_ip_blacklisted(remote) and not ip_gate_exempt):
+        state.add_security_event('high', 'Network Access',
+                                 f'Blacklisted IP {remote} blocked from API',
+                                 'Request rejected by blue-team IP blacklist',
+                                 'Blue Team Defense', ip=remote)
+        return jsonify({'error': 'Access denied'}), 403
+
+    # ── IP whitelist (allowlist matcher) ─────────────────────────────────
+    if (active and settings.get('ip_whitelist_enabled')
+            and not ip_is_whitelisted(remote) and not ip_gate_exempt):
+        state.add_security_event('medium', 'Network Access',
+                                 f'Non-whitelisted IP {remote} blocked from API',
+                                 'Request rejected by blue-team IP whitelist',
+                                 'Blue Team Defense', ip=remote)
+        return jsonify({'error': 'IP not whitelisted'}), 403
+
+    # ── XSS / SQLi filter (built-in signatures) ──────────────────────────
+    if active and settings.get('xss_protection') and not request.path.startswith('/api/blueteam/'):
+        payload = ''
+        if request.is_json:
+            data = request.get_json(silent=True) or {}
+            payload = json.dumps(data)
+        elif request.form:
+            payload = request.form.to_dict(flat=False).values().__repr__()
+        query = request.query_string.decode('utf-8', 'ignore')
+        if request_has_xss_or_sqli(request.path, query, payload):
+            try:
+                write_action_log('xss_attempt_blocked',
+                                 actor='defense',
+                                 details={'path': request.path, 'ip': remote})
+            except Exception:
+                pass
+            state.add_security_event(
+                'medium', 'Web Application Security',
+                'Request blocked by blue-team web filter',
+                f'Path {request.path} from {remote} rejected by security filter',
+                'Blue Team Defense', ip=remote
+            )
+            return jsonify({'error': 'Request blocked by security filter'}), 400
+    return None
+
 
 def validate_token(token, required_type=None):
     """Validate token and check expiration"""
@@ -484,6 +766,31 @@ def validate_token(token, required_type=None):
     if token_data['expires'] < time.time():
         del active_tokens[token]
         return None
+
+    # ── Blue-team inactivity auto-logout ──────────────────────────────────
+    if token_data.get('role') == 'blueteam':
+        if blueteam_inactivity_expired():
+            blueteam_auto_logout()
+            return None
+        # Any use of the token counts as activity (refreshes the timer)
+        blueteam_defense['last_activity'] = time.time()
+
+    # ── Blue-team admin session timeout enforcement ──────────────────────
+    # The cap counts from the later of the session's creation and the moment
+    # blue-team defenses were activated. A pre-existing admin session is
+    # therefore given the configured grace period from the point the control
+    # was armed instead of being killed instantly mid-task, while lingering
+    # sessions are still eventually forced to re-authenticate.
+    if (blueteam_defense['active']
+            and token_data.get('role') == 'admin'):
+        timeout_min = int(blueteam_defense['settings'].get('admin_session_timeout_minutes', 30))
+        created = token_data.get('created', 0)
+        active_since = blueteam_defense.get('active_since', 0) or 0
+        effective_start = max(created, active_since)
+        if time.time() - effective_start > timeout_min * 60:
+            del active_tokens[token]
+            logger.info("Admin session expired via blue-team timeout policy")
+            return None
     
     if required_type and token_data['type'] != required_type:
         return None
@@ -670,16 +977,35 @@ def on_mqtt_message(client, userdata, msg):
                 logger.debug(f"Ignored non-PV telemetry message: {json.dumps(payload)[:60]}")
                 return  # Ignore background noise telemetry
             
-            # Detect malformed data (type confusion attacks)
+            # ── TELEMETRY VALIDATION (blue-team defensive control) ─────────
+            # When enabled, drops messages whose power reading is non-numeric or
+            # falls outside the configured safe physical bounds.
+            if (blueteam_defense['active']
+                    and blueteam_defense['settings'].get('telemetry_validation')):
+                within = True
+                if power is not None:
+                    if not isinstance(power, (int, float)):
+                        within = False
+                    else:
+                        hi = blueteam_defense['settings'].get('telemetry_max_power_kw', 10.0)
+                        lo = blueteam_defense['settings'].get('telemetry_min_power_kw', -2.0)
+                        if not (lo <= float(power) <= hi):
+                            within = False
+                if not within:
+                    logger.info("Blue-team telemetry validation dropped message")
+                    state.add_security_event(
+                        'high', 'Data Integrity',
+                        'Malformed telemetry blocked by validation',
+                        f'Payload rejected by telemetry limits: {json.dumps(payload)[:80]}',
+                        'Blue Team Defense'
+                    )
+                    return  # refuse to ingest attacker injection
+            
             # Detect malformed data (type confusion attacks)
             if power is not None and not isinstance(power, (int, float)):
                 # Throttle malformed events to avoid flooding: at most one per 60 seconds
-                last_malformed = state.get('last_malformed_time') if hasattr(state, 'get') else None
                 now = datetime.now()
-                try:
-                    last = getattr(state, 'last_malformed_time', None)
-                except Exception:
-                    last = None
+                last = getattr(state, 'last_malformed_time', None)
                 if last is None or (now - last).total_seconds() > 60:
                     # build small payload snippet for details (only power info)
                     snippet = json.dumps({'power_kw': power}) if 'power_kw' in payload else json.dumps({'power': power})
@@ -793,6 +1119,10 @@ def on_mqtt_message(client, userdata, msg):
                     'PV system forcibly halted through MQTT control channel. Possible remote attack.',
                     'MQTT Monitor'
                 )
+
+            elif command == 'RESET':
+                reset_pv_plant(actor='MQTT operator', via='MQTT')
+                logger.info("♻️ PV SYSTEM RESET VIA MQTT")
                 
     except Exception as e:
         logger.error(f"MQTT message error: {e}")
@@ -803,6 +1133,9 @@ def publish_mqtt_status():
         status_msg = {
             'status': pv_status['status'],
             'power_kw': pv_status['power_kw'],
+            'voltage_v': pv_status.get('voltage_v', 240),
+            'current_a': pv_status.get('current_a', 0),
+            'uptime_s': int(time.time() - SERVER_STARTED_AT),
             'timestamp': time.time(),
             'session': MQTT_SESSION_TOKEN  # Only visible in packet capture!
         }
@@ -815,20 +1148,29 @@ def mqtt_telemetry_thread():
     while True:
         try:
             if mqtt_client and mqtt_client.is_connected():
+                power_kw = compute_pv_power()
+                voltage_v = round(239.5 + random.uniform(-2.5, 2.5), 1)
+                current_a = round((power_kw * 1000.0 / max(1, voltage_v)), 2) if power_kw > 0 else 0.0
                 telemetry = {
-                    'power_kw': pv_status['power_kw'] + (hash(time.time()) % 100) / 100,
-                    'voltage_v': pv_status['voltage_v'] + (hash(time.time()) % 10),
-                    'current_a': pv_status['current_a'] + (hash(time.time()) % 5) / 10,
+                    'power_kw': power_kw,
+                    'voltage_v': voltage_v,
+                    'current_a': current_a,
                     'timestamp': time.time()
                 }
+                # Keep the shared status consistent so /api/status and MQTT
+                # status messages reflect the same simulated plant state
+                pv_status['power_kw'] = power_kw
+                pv_status['voltage_v'] = voltage_v
+                pv_status['current_a'] = current_a
+                pv_status['last_update'] = telemetry['timestamp']
                 mqtt_client.publish('pv/telemetry', json.dumps(telemetry), qos=0)
                 mqtt_series.append({
                     'ts': telemetry['timestamp'],
                     'value': telemetry['power_kw'],
                     'power': telemetry['power_kw']
                 })
-                if len(mqtt_series) > 1000:
-                    mqtt_series = mqtt_series[-1000:]
+                if len(mqtt_series) > 600:
+                    mqtt_series = mqtt_series[-600:]
                 
                 # Occasionally publish status (with session token)
                 now = time.time()
@@ -879,29 +1221,40 @@ def modbus_monitor_thread():
                 
                 # Detect change from False to True
                 if coil1_value and not last_coil1_value:
-                    logger.critical("🛑 PV SYSTEM HALTED VIA MODBUS (Coil 1 set to TRUE)")
-                    pv_status['status'] = 'HALTED'
-                    pv_status['power_kw'] = 0
-                    
-                    # Only alert if this is a new attack (within last 5 seconds)
-                    # Prevents duplicate alerts on container restart
-                    now = datetime.now()
-                    if last_modbus_alert_time is None or (now - last_modbus_alert_time).total_seconds() > 5:
+                    # Blue-team protection: if write protection armed, refuse to halt
+                    if (blueteam_defense['active']
+                            and blueteam_defense['settings'].get('modbus_write_restricted')):
+                        logger.info("🔒 Blue-team Modbus protection prevented HALT via monitor")
                         state.add_security_event(
-                            'critical',
-                            'ICS Protocol',
-                            'Unauthorized Modbus write operation detected',
-                            'Coil 1 was set to TRUE, triggering system HALT. This indicates direct ICS protocol exploitation.',
-                            'Modbus Monitor'
+                            'high', 'ICS Protocol',
+                            'Modbus HALT attempt BLOCKED by protection',
+                            'Coil 1 write rejected by defense control',
+                            'Blue Team Defense'
                         )
-                        last_modbus_alert_time = now
-                    
-                    # Write flag to log file
-                    try:
-                        with open('/opt/pv-controller/logs/modbus_attacks.log', 'a') as f:
-                            f.write(f"{datetime.now().isoformat()},MODBUS_HALT,{FLAGS['modbus_attack']},coil_1\n")
-                    except Exception as e:
-                        logger.error(f"Failed to write modbus log: {e}")
+                    else:
+                        logger.critical("🛑 PV SYSTEM HALTED VIA MODBUS (Coil 1 set to TRUE)")
+                        pv_status['status'] = 'HALTED'
+                        pv_status['power_kw'] = 0
+                        
+                        # Only alert if this is a new attack (within last 5 seconds)
+                        # Prevents duplicate alerts on container restart
+                        now = datetime.now()
+                        if last_modbus_alert_time is None or (now - last_modbus_alert_time).total_seconds() > 5:
+                            state.add_security_event(
+                                'critical',
+                                'ICS Protocol',
+                                'Unauthorized Modbus write operation detected',
+                                'Coil 1 was set to TRUE, triggering system HALT. This indicates direct ICS protocol exploitation.',
+                                'Modbus Monitor'
+                            )
+                            last_modbus_alert_time = now
+                        
+                        # Write flag to log file
+                        try:
+                            with open('/opt/pv-controller/logs/modbus_attacks.log', 'a') as f:
+                                f.write(f"{datetime.now().isoformat()},MODBUS_HALT,{FLAGS['modbus_attack']},coil_1\n")
+                        except Exception as e:
+                            logger.error(f"Failed to write modbus log: {e}")
                 
                 last_coil1_value = coil1_value
         except Exception as e:
@@ -909,31 +1262,70 @@ def modbus_monitor_thread():
         
         time.sleep(1)
 
-def modbus_write_callback(slave_id, function_code, address, values):
-    """Called when Modbus WRITE operation occurs"""
-    logger.warning(f"🔴 MODBUS WRITE DETECTED: slave={slave_id}, fc={function_code}, addr={address}, values={values}")
-    
-    # Don't create security event here - let the monitoring thread detect the coil change
-    # This prevents duplicate alerts
-    
-    state.mark_event('modbus_write_executed', {
-        'address': address,
-        'values': values,
-        'function_code': function_code
-    })
-    
-    # Coil 1 = HALT control
-    if address == 1 and values and values[0]:
-        logger.critical("🛑 PV SYSTEM HALTED VIA MODBUS")
-        pv_status['status'] = 'HALTED'
-        pv_status['power_kw'] = 0
-        
-        # Write flag to log file (student must check logs)
-        try:
-            with open('/opt/pv-controller/logs/modbus_attacks.log', 'a') as f:
-                f.write(f"{datetime.now().isoformat()},MODBUS_HALT,{FLAGS['modbus_attack']},coil_{address}\n")
-        except Exception as e:
-            logger.error(f"Failed to write modbus log: {e}")
+class GuardedCoilBlock(ModbusSequentialDataBlock):
+    """Coil store that physically drops the HALT write when blue-team Modbus
+    write protection is armed.
+
+    pymodbus has no write callback hook, so writes are intercepted by wrapping
+    the coil datablock. When the control is active, a write that sets coil 1
+    TRUE is refused before it ever reaches the plant; the traffic is still
+    flagged as a security event so the blue team can attribute the attempt.
+    """
+
+    def setValues(self, address, values):
+        # pymodbus offsets device addresses by +1 into the datastore, so the
+        # HALT coil (device coil 1) lives at block index 2 even though callers
+        # address it as 1.
+        if isinstance(values, (list, tuple)):
+            touched = range(address, address + len(values))
+            any_true = any(v not in (0, False) for v in values)
+        else:
+            touched = range(address, address + 1)
+            any_true = values not in (0, False)
+        if (2 in touched and any_true
+                and blueteam_defense['active']
+                and blueteam_defense['settings'].get('modbus_write_restricted')):
+            logger.info("🔒 Blue-team Modbus write protection blocked HALT write")
+            state.add_security_event(
+                'high', 'ICS Protocol',
+                'Modbus HALT write BLOCKED by protection',
+                f'Write to coil 1 (TRUE) rejected at datastore — defense control active',
+                'Blue Team Defense'
+            )
+            return  # do NOT land the write, do NOT halt the plant
+        return super().setValues(address, values)
+
+
+def reset_pv_plant(actor='operator', via='HMI'):
+    """Restore a halted PV plant to RUNNING after an incident.
+
+    Clears the Modbus HALT coil and resets the plant status so telemetry
+    resumes. Records the action as a security event + HMI notification so the
+    recovery is visible to both teams.
+    """
+    global modbus_context
+    pv_status['status'] = 'RUNNING'
+    pv_status['power_kw'] = 0.0  # repopulated by the telemetry thread momentarily
+
+    # Clear coil 1 so the monitor doesn't re-trigger the halt on the next poll
+    # and the plant state matches a fresh boot.
+    try:
+        if modbus_context is not None:
+            modbus_context[0].setValues(1, 1, [False])
+    except Exception:
+        logger.exception('Failed to clear Modbus coil 1 during plant reset')
+
+    state.add_security_event(
+        'low', 'System Control',
+        f'PV plant reset to RUNNING ({via})',
+        f'Plant restored after halt by {actor}',
+        'Plant Controller'
+    )
+    try:
+        write_action_log('plant_reset', actor=actor, details={'status': 'RUNNING', 'via': via})
+    except Exception:
+        logger.exception('Failed to write plant_reset action log')
+    logger.info(f"♻️ PV plant reset to RUNNING by {actor} via {via}")
 
 def modbus_server_thread():
     """Run Modbus TCP server"""
@@ -947,7 +1339,7 @@ def modbus_server_thread():
         # Define Modbus registers (pymodbus 3.x API)
         device = ModbusDeviceContext(
             di=ModbusSequentialDataBlock(0, [0]*100),  # Discrete Inputs
-            co=ModbusSequentialDataBlock(0, [0]*100),  # Coils
+            co=GuardedCoilBlock(0, [0]*100),            # Coils (write-protected)
             hr=ModbusSequentialDataBlock(0, [0]*100),  # Holding Registers
             ir=ModbusSequentialDataBlock(0, [0]*100),  # Input Registers
         )
@@ -1137,8 +1529,8 @@ def clear_stolen_creds():
 @app.route("/api/admin/login", methods=["POST"])
 def admin_login():
     """
-    Admin login - requires REAL credentials obtained via phishing
-    NO SQL injection - realistic authentication
+    Admin / Blue-team login.
+    Returns a role-aware token so the front-end can branch views.
     """
     data = request.json or {}
     username = data.get('username')
@@ -1148,7 +1540,7 @@ def admin_login():
     if not username or not password:
         return jsonify({"error": "Missing credentials"}), 400
     
-    # Check if area is blocked for this IP
+    # ── IP block check ─────────────────────────────────────────────────
     if state.is_blocked(client_ip):
         try:
             write_action_log('admin_login_blocked', actor=username or 'unknown', details={'ip': client_ip})
@@ -1158,30 +1550,61 @@ def admin_login():
         state.add_security_event('medium', 'Authentication', 'Blocked IP attempted admin login', f'IP: {client_ip}', 'Authentication Service', ip=client_ip)
         return jsonify({"error": "Access denied"}), 403
 
-    # Check credentials
-    if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
-        token = generate_token(username, 'admin', expires_in=1800, ip_address=client_ip)
+    # ── Blue-team rate-limit (only active when blueteam is logged in) ───
+    if blueteam_defense['active'] and blueteam_defense['settings'].get('login_rate_limit'):
+        now = time.time()
+        window = 60
+        _blueteam_login_ts[:] = [t for t in _blueteam_login_ts if now - t < window]
+        if len(_blueteam_login_ts) >= blueteam_defense['settings'].get('rate_limit_per_minute', 5):
+            state.add_security_event('high', 'Rate Limiting',
+                                     f'Login rate limit triggered from {client_ip}',
+                                     f'{len(_blueteam_login_ts)} attempts in {window}s',
+                                     'Blue Team Defense', ip=client_ip)
+            return jsonify({"error": "Rate limit exceeded – try again later"}), 429
+        _blueteam_login_ts.append(now)
+
+    # ── Credential check ───────────────────────────────────────────────
+    is_blueteam = (username == BLUETEAM_USERNAME and password == BLUETEAM_PASSWORD)
+    is_admin     = (username == ADMIN_USERNAME  and password == ADMIN_PASSWORD)
+
+    if is_blueteam:
+        # Activate defense system when defender logs in. Settings created in a
+        # prior session are reset only on logout, so a re-login does not wipe
+        # changes that were never properly logged off.
+        if not blueteam_defense['active']:
+            blueteam_defense['settings'] = dict(BLUETEAM_DEFAULT_SETTINGS)
+        blueteam_defense['active'] = True
+        blueteam_defense['active_since'] = time.time()
+        blueteam_defense['last_activity'] = time.time()
+        token = generate_token(username, 'blueteam', expires_in=3600, ip_address=client_ip, role='blueteam')
+        blueteam_defense['active_token'] = token
+        try:
+            write_action_log('blueteam_login_success', actor=username, details={'ip': client_ip})
+        except Exception:
+            logger.exception('Failed to write action log for blueteam login')
+        state.add_security_event('low', 'Authentication',
+                                 f'Blue team operator logged in from {client_ip}',
+                                 'Defense system activated', 'Authentication Service', ip=client_ip)
+        logger.info(f"✓ Blue team authenticated: {username}")
+        return jsonify({"token": token, "username": username, "role": "blueteam", "expires_in": 3600})
+
+    if is_admin:
+        # Deactivate blue-team defenses when admin logs in (admin overrides)
+        blueteam_defense['active'] = False
+        blueteam_defense['active_since'] = 0.0
+        blueteam_defense['settings'] = dict(BLUETEAM_DEFAULT_SETTINGS)
+        token = generate_token(username, 'admin', expires_in=1800, ip_address=client_ip, role='admin')
         try:
             write_action_log('admin_login_success', actor=username, details={'ip': client_ip})
         except Exception:
             logger.exception('Failed to write action log for successful login')
-        
         state.mark_event('admin_authenticated', {'username': username})
-        state.add_security_event(
-            'medium',
-            'Authentication',
-            f'Admin login successful from {client_ip}',
-            f'User {username} authenticated successfully',
-            'Authentication Service',
-            ip=client_ip
-        )
+        state.add_security_event('medium', 'Authentication',
+                                 f'Admin login successful from {client_ip}',
+                                 f'User {username} authenticated successfully',
+                                 'Authentication Service', ip=client_ip)
         logger.info(f"✓ Admin authenticated: {username}")
-        
-        return jsonify({
-            "token": token,
-            "username": username,
-            "expires_in": 1800
-        })
+        return jsonify({"token": token, "username": username, "role": "admin", "expires_in": 1800})
     
     # Track failed login
     try:
@@ -1191,6 +1614,159 @@ def admin_login():
     state.add_failed_login(username, client_ip)
     logger.warning(f"Failed admin login attempt: {username} from {client_ip}")
     return jsonify({"error": "Invalid credentials"}), 401
+
+
+# ============================================================================
+# BLUE TEAM DEFENSE ENDPOINTS
+# ============================================================================
+
+def _validate_blueteam_token(token):
+    """Return token_data if valid blue-team token, else None."""
+    data = validate_token(token)
+    if data and data.get('role') == 'blueteam':
+        return data
+    return None
+
+
+@app.route('/api/blueteam/settings', methods=['GET'])
+def blueteam_get_settings():
+    token = request.headers.get('Authorization', '').removeprefix('Bearer ').strip()
+    if not _validate_blueteam_token(token):
+        return jsonify({'error': 'Unauthorized'}), 401
+    return jsonify({
+        'active': blueteam_defense['active'],
+        'settings': blueteam_defense['settings'],
+        'inactivity_timeout_minutes': blueteam_defense['settings'].get('inactivity_timeout_minutes', 5),
+        'last_activity': blueteam_defense['last_activity'],
+    })
+
+
+@app.route('/api/blueteam/settings', methods=['PUT'])
+def blueteam_update_settings():
+    token = request.headers.get('Authorization', '').removeprefix('Bearer ').strip()
+    if not _validate_blueteam_token(token):
+        return jsonify({'error': 'Unauthorized'}), 401
+    data = request.get_json(silent=True) or {}
+    settings = blueteam_defense['settings']
+
+    # Whitelist of keys that the blue team is allowed to change
+    allowed_keys = set(BLUETEAM_DEFAULT_SETTINGS.keys())
+    for key, value in data.items():
+        if key not in allowed_keys:
+            continue
+        # Coerce to expected type
+        default = BLUETEAM_DEFAULT_SETTINGS[key]
+        if isinstance(default, bool):
+            settings[key] = bool(value)
+        elif isinstance(default, (int, float)):
+            settings[key] = type(default)(value)
+        elif isinstance(default, list):
+            settings[key] = list(value)
+        else:
+            settings[key] = value
+
+    blueteam_defense['active'] = True
+    touch_blueteam_activity()
+    logger.info(f"Blue-team defense updated: {list(data.keys())}")
+    try:
+        write_action_log('blueteam_settings_updated',
+                         actor='blueteam',
+                         details={'updated_keys': list(data.keys())})
+    except Exception:
+        pass
+    return jsonify({'status': 'ok', 'settings': settings})
+
+
+@app.route('/api/blueteam/logout', methods=['POST'])
+def blueteam_logout():
+    """Clear all blue-team defenses — system reverts to insecure defaults."""
+    token = request.headers.get('Authorization', '').removeprefix('Bearer ').strip()
+    token_data = active_tokens.get(token)
+    is_bt = token_data and token_data.get('role') == 'blueteam'
+    # Also accept admin calling this to force-reset
+    is_admin = token_data and token_data.get('role') == 'admin'
+    if not is_bt and not is_admin:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    blueteam_auto_logout()
+    logger.info("Blue-team defense reset — system reverted to insecure defaults")
+    try:
+        write_action_log('blueteam_logout_reset',
+                         actor=token_data.get('username', 'unknown'),
+                         details={'status': 'all_defenses_cleared'})
+    except Exception:
+        pass
+    # The auto_logout already revokes the stored blueteam token; revoke this one too
+    if token in active_tokens and active_tokens[token].get('role') == 'blueteam':
+        del active_tokens[token]
+    return jsonify({'status': 'reset'})
+
+
+@app.route('/api/blueteam/change-password', methods=['POST'])
+def blueteam_change_password():
+    """Let the blue-team operator rotate their own credential."""
+    global BLUETEAM_PASSWORD
+    token = request.headers.get('Authorization', '').replace('Bearer ', '').strip()
+    token_data = active_tokens.get(token)
+    if not token_data or token_data.get('role') != 'blueteam':
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    data = request.json or {}
+    current = data.get('current_password') or ''
+    new_pw = data.get('new_password') or ''
+    confirm = data.get('confirm_password')
+
+    if current != BLUETEAM_PASSWORD:
+        state.add_security_event('medium', 'Authentication',
+                                 'Blue team password change rejected (wrong current password)',
+                                 'Incorrect current password supplied',
+                                 'Blue Team Authentication')
+        return jsonify({'error': 'Current password is incorrect'}), 400
+
+    if len(new_pw) < 6:
+        return jsonify({'error': 'New password must be at least 6 characters'}), 400
+
+    if confirm is not None and new_pw != confirm:
+        return jsonify({'error': 'New password confirmation does not match'}), 400
+
+    if new_pw == BLUETEAM_PASSWORD:
+        return jsonify({'error': 'New password must differ from the current password'}), 400
+
+    BLUETEAM_PASSWORD = new_pw
+    _save_blueteam_password(new_pw)
+    state.add_security_event('high', 'Authentication',
+                             'Blue team operator password was changed',
+                             'Blue team credential rotated',
+                             'Blue Team Authentication')
+    try:
+        write_action_log('blueteam_password_changed',
+                         actor=token_data.get('username', 'blueteam'),
+                         details={'status': 'success'})
+    except Exception:
+        logger.exception('Failed to write password-change action log')
+    logger.info("Blue team operator changed their password")
+    return jsonify({'status': 'ok', 'message': 'Password updated'})
+
+
+@app.route('/api/blueteam/defense_status')
+def blueteam_defense_status():
+    """Public endpoint so the HMI can show 'Defenses Active' banner."""
+    return jsonify({
+        'active': blueteam_defense['active'],
+        'controls_enabled': sum(1 for k, v in blueteam_defense['settings'].items()
+                                if isinstance(v, bool) and v and k != 'login_rate_limit'),
+        'alert_tier': blueteam_defense['settings'].get('alert_notification_tier', 'low'),
+        'inactivity_timeout_minutes': blueteam_defense['settings'].get('inactivity_timeout_minutes', 5),
+        'telemetry_validation': bool(
+            blueteam_defense['active']
+            and blueteam_defense['settings'].get('telemetry_validation')),
+        'telemetry_min_kw': blueteam_defense['settings'].get('telemetry_min_power_kw', -2.0),
+        'telemetry_max_kw': blueteam_defense['settings'].get('telemetry_max_power_kw', 10.0),
+        'modbus_write_restricted': bool(
+            blueteam_defense['active']
+            and blueteam_defense['settings'].get('modbus_write_restricted')),
+    })
+
 
 @app.route("/assets/<path:filename>")
 def serve_assets(filename):
@@ -1280,8 +1856,10 @@ def admin_activity_log():
 
     if auth_header.startswith('Bearer '):
         token = auth_header.split(' ', 1)[1]
-        token_data = validate_token(token, 'admin')
-        if not token_data:
+        token_data = validate_token(token)
+        # Both the admin HMI and the blue-team console log their actions to the
+        # same audit trail, so either operator role is acceptable here.
+        if not token_data or token_data.get('role') not in ('admin', 'blueteam'):
             return jsonify({'error': 'Invalid or expired token'}), 403
 
     data = request.json or {}
@@ -1400,7 +1978,7 @@ def api_status():
         "power_kw": pv_status['power_kw'],
         "voltage_v": pv_status['voltage_v'],
         "current_a": pv_status['current_a'],
-        "uptime": int(time.time() - state.timestamps.get('network_scanned', time.time())),
+        "uptime_s": int(time.time() - SERVER_STARTED_AT),
         "mqtt_connected": mqtt_client.is_connected() if mqtt_client else False
     })
 
@@ -1414,8 +1992,184 @@ def status_compat():
         "power_kw": pv_status['power_kw'],
         "voltage_v": pv_status['voltage_v'],
         "current_a": pv_status['current_a'],
+        "uptime_s": int(time.time() - SERVER_STARTED_AT),
         "mqtt_session": MQTT_SESSION_TOKEN,
         "last_update": pv_status['last_update']
+    })
+
+
+@app.route("/api/plant/reset", methods=['POST'])
+def api_plant_reset():
+    """Operator recovery action: bring a halted plant back to RUNNING.
+
+    Available to any authenticated operator (admin or blue team) so the plant
+    can be restored after an incident without a full container restart.
+    """
+    token = request.headers.get('Authorization', '').replace('Bearer ', '').strip()
+    token_data = validate_token(token)
+    if not token_data:
+        return jsonify({'error': 'Invalid or expired token'}), 401
+
+    actor = token_data.get('username', 'operator')
+    reset_pv_plant(actor=actor, via='HMI')
+    return jsonify({'success': True, 'status': pv_status['status']})
+
+
+_net_counters_lock = threading.Lock()
+_net_counters_prev = {'rx': 0, 'tx': 0, 't': 0.0}
+
+
+def _read_host_metrics():
+    """Collect real host metrics from /proc (Linux) with graceful fallbacks."""
+    # --- CPU utilisation (sample /proc/stat twice) ---
+    cpu_pct = None
+    try:
+        def _cpu_snapshot():
+            with open('/proc/stat') as f:
+                parts = f.readline().split()[1:]
+            return [int(v) for v in parts]
+
+        t1 = _cpu_snapshot()
+        time.sleep(0.12)
+        t2 = _cpu_snapshot()
+        deltas = [b - a for a, b in zip(t1, t2)]
+        total = sum(deltas)
+        idle = deltas[3] + (deltas[4] if len(deltas) > 4 else 0)
+        if total > 0:
+            cpu_pct = round(100.0 * (total - idle) / total, 1)
+    except Exception:
+        pass
+
+    # --- Memory ---
+    mem_pct = None
+    mem_used_mb = mem_total_mb = 0
+    try:
+        info = {}
+        for line in open('/proc/meminfo'):
+            key, val = line.split(':', 1)
+            info[key.strip()] = int(val.split()[0])  # kB
+        mtot = info.get('MemTotal', 0)
+        mava = info.get('MemAvailable', info.get('MemFree', 0))
+        if mtot > 0:
+            mem_total_mb = mtot // 1024
+            mem_used_mb = (mtot - mava) // 1024
+            mem_pct = round(100.0 * (mtot - mava) / mtot, 1)
+    except Exception:
+        pass
+
+    # --- Network throughput (all non-loopback interfaces) ---
+    rx_bps = tx_bps = 0
+    net_pct = None
+    global _net_counters_prev
+    try:
+        rx = tx = 0
+        for line in open('/proc/net/dev').read().splitlines()[2:]:
+            name, data = line.split(':', 1)
+            if name.strip() == 'lo':
+                continue
+            fields = data.split()
+            if len(fields) >= 9:
+                rx += int(fields[0])
+                tx += int(fields[8])
+        now = time.time()
+        with _net_counters_lock:
+            prev = _net_counters_prev
+            dt = now - prev['t'] if prev['t'] else 0
+            if dt > 0 and prev['t'] > 0:
+                rx_bps = max(0, int((rx - prev['rx']) / dt))
+                tx_bps = max(0, int((tx - prev['tx']) / dt))
+                # utilisation vs assumed 100 Mbps link
+                net_pct = min(100.0, round(100.0 * (rx_bps + tx_bps) * 8 / (100 * 1000 * 1000), 2))
+            _net_counters_prev = {'rx': rx, 'tx': tx, 't': now}
+    except Exception:
+        pass
+
+    # --- Disk (logs partition) ---
+    disk_pct = None
+    disk_used_gb = disk_total_gb = 0.0
+    try:
+        target = '/opt/pv-controller/logs' if os.path.isdir('/opt/pv-controller/logs') else '/'
+        du = shutil.disk_usage(target)
+        disk_total_gb = round(du.total / (1024 ** 3), 1)
+        disk_used_gb = round((du.total - du.free) / (1024 ** 3), 1)
+        disk_pct = round(100.0 * du.used / du.total, 1)
+    except Exception:
+        pass
+
+    load1 = load5 = load15 = None
+    try:
+        load1, load5, load15 = [round(x, 2) for x in os.getloadavg()]
+    except Exception:
+        pass
+
+    proc_rss_mb = proc_threads = None
+    try:
+        with open('/proc/self/status') as f:
+            status_txt = f.read()
+        m = re.search(r'^VmRSS:\s+(\d+)\s+kB', status_txt, re.M)
+        if m:
+            proc_rss_mb = round(int(m.group(1)) / 1024, 1)
+        m = re.search(r'^Threads:\s+(\d+)', status_txt, re.M)
+        if m:
+            proc_threads = int(m.group(1))
+    except Exception:
+        pass
+
+    return {
+        'cpu': {'percent': cpu_pct},
+        'memory': {'percent': mem_pct, 'used_mb': mem_used_mb, 'total_mb': mem_total_mb},
+        'network': {
+            'percent': net_pct,
+            'rx_kbps': round(rx_bps / 1024, 1),
+            'tx_kbps': round(tx_bps / 1024, 1),
+        },
+        'disk': {'percent': disk_pct, 'used_gb': disk_used_gb, 'total_gb': disk_total_gb},
+        'load_avg': {'m1': load1, 'm5': load5, 'm15': load15},
+        'process': {'rss_mb': proc_rss_mb, 'threads': proc_threads,
+                    'uptime_s': int(time.time() - SERVER_STARTED_AT)},
+    }
+
+
+@app.route('/api/system/metrics')
+def system_metrics():
+    """Live host performance metrics for the HMI diagnostics panel."""
+    return jsonify(_read_host_metrics())
+
+
+@app.route('/api/system/info')
+def system_info():
+    """Live network/system topology info for the HMI diagnostics panel."""
+    controller_ips = []
+    try:
+        host_ips = socket.gethostbyname_ex(socket.gethostname())[2]
+        controller_ips = [ip for ip in host_ips if not ip.startswith('127.')]
+    except Exception:
+        pass
+
+    mqtt_ok = bool(mqtt_client.is_connected()) if mqtt_client else False
+    modbus_port = int(os.getenv('MODBUS_PORT', '15002'))
+    modbus_listening = False
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(0.5)
+        modbus_listening = probe.connect_ex(('127.0.0.1', modbus_port)) == 0
+        probe.close()
+    except Exception:
+        pass
+
+    return jsonify({
+        'controller_ips': controller_ips,
+        'mqtt_broker': {
+            'host': MQTT_BROKER,
+            'port': 1883,
+            'websocket_port': 9001,
+            'connected': mqtt_ok,
+        },
+        'modbus': {'port': modbus_port, 'listening': modbus_listening},
+        'session': MQTT_SESSION_TOKEN,
+        'firmware': 'PV-CTRL v2.4.1',
+        'site': 'CY-LIM-042',
+        'server_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
     })
 
 
@@ -1689,8 +2443,9 @@ def trigger_phishing_notification():
     
     # Add pop-up notification for victim dashboard
     with state.lock:
+        state.notification_seq += 1
         notification = {
-            'id': len(state.notifications) + 1,
+            'id': state.notification_seq,
             'timestamp': datetime.now().isoformat(),
             'type': 'urgent',
             'title': '⚠️ System Alert',
@@ -1700,7 +2455,7 @@ def trigger_phishing_notification():
             'read': False
         }
         state.notifications.append(notification)
-        # Keep last 20 notifications
+        # Keep last 20 notifications (IDs stay unique thanks to the counter)
         if len(state.notifications) > 20:
             state.notifications = state.notifications[-20:]
     

@@ -12,6 +12,7 @@ services:
       - "15002:15002" # Expose Modbus TCP for external tools using 15002
     environment:
       - MQTT_HOST=mosquitto
+      - TZ=Asia/Nicosia
       - MODBUS_PORT=15002
       - BLOCK_TTL_SECONDS=60
       - LOG_LEVEL=WARNING
@@ -91,6 +92,8 @@ services:
       PV_URL: http://pv-controller
       PV_HOST: pv-controller
       PV_BASE_URL: http://pv-controller
+      VICTIM_ADMIN_USERNAME: admin
+      VICTIM_ADMIN_PASSWORD: admin123
     volumes:
       - ./logs:/opt/pv-controller/logs
     logging:

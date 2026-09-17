@@ -9,6 +9,19 @@ interface PowerChartProps {
   telemetryData: any[];
 }
 
+const CAPACITY_KW = 4.8;
+const SUNRISE_H = 6.5;
+const SUNSET_H = 19.5;
+
+/** Expected output for a given timestamp based on the site daylight model */
+const expectedKw = (tsMs: number) => {
+  const d = new Date(tsMs);
+  const h = d.getHours() + d.getMinutes() / 60;
+  if (h <= SUNRISE_H || h >= SUNSET_H) return 0;
+  const x = (h - SUNRISE_H) / (SUNSET_H - SUNRISE_H);
+  return Math.max(0, Math.pow(Math.sin(Math.PI * x), 1.35)) * CAPACITY_KW * 0.92;
+};
+
 const PowerChart: React.FC<PowerChartProps> = ({ telemetryData }) => {
   const chartData = {
     labels: telemetryData.map(d => {
@@ -19,12 +32,22 @@ const PowerChart: React.FC<PowerChartProps> = ({ telemetryData }) => {
       {
         label: 'Power Output (kW)',
         data: telemetryData.map(d => d.power_kw || d.power || d.value || 0),
-        borderColor: '#64ffda',
-        backgroundColor: 'rgba(100, 255, 218, 0.1)',
+        borderColor: '#ffb000',
+        backgroundColor: 'rgba(255, 176, 0, 0.08)',
         tension: 0.4,
         fill: true,
-        pointRadius: 2,
-        pointHoverRadius: 5,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+      },
+      {
+        label: 'Expected Output (kW)',
+        data: telemetryData.map(d => expectedKw((d.timestamp || d.ts) * 1000)),
+        borderColor: 'rgba(122, 162, 200, 0.8)',
+        borderDash: [6, 5],
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: false,
+        tension: 0.3,
       },
     ],
   };
@@ -32,11 +55,14 @@ const PowerChart: React.FC<PowerChartProps> = ({ telemetryData }) => {
   const options = {
     responsive: true,
     maintainAspectRatio: false,
+    // Animations are disabled - the chart re-renders on every telemetry tick
+    animation: false as const,
+    transitions: {},
     plugins: {
       legend: {
         display: true,
         labels: {
-          color: '#64ffda',
+          color: '#ffb000',
           font: {
             family: 'Courier New',
             size: 12,
@@ -53,7 +79,7 @@ const PowerChart: React.FC<PowerChartProps> = ({ telemetryData }) => {
           color: 'rgba(100, 255, 218, 0.1)',
         },
         ticks: {
-          color: '#8892b0',
+          color: '#7c8794',
           font: {
             family: 'Courier New',
           },
@@ -64,7 +90,7 @@ const PowerChart: React.FC<PowerChartProps> = ({ telemetryData }) => {
           color: 'rgba(100, 255, 218, 0.1)',
         },
         ticks: {
-          color: '#8892b0',
+          color: '#7c8794',
           font: {
             family: 'Courier New',
           },
@@ -77,10 +103,34 @@ const PowerChart: React.FC<PowerChartProps> = ({ telemetryData }) => {
   const stats = {
     max: telemetryData.length > 0 ? Math.max(...telemetryData.map(d => d.power_kw || d.power || d.value || 0)) : 0,
     min: telemetryData.length > 0 ? Math.min(...telemetryData.map(d => d.power_kw || d.power || d.value || 0)) : 0,
-    avg: telemetryData.length > 0 
+    avg: telemetryData.length > 0
       ? telemetryData.reduce((sum, d) => sum + (d.power_kw || d.power || d.value || 0), 0) / telemetryData.length
       : 0,
   };
+
+  const latestPower = stats.max >= 0 && telemetryData.length > 0
+    ? (telemetryData[telemetryData.length - 1].power_kw ?? telemetryData[telemetryData.length - 1].power ?? 0)
+    : 0;
+  const latestTsMs = telemetryData.length > 0
+    ? (telemetryData[telemetryData.length - 1].timestamp || telemetryData[telemetryData.length - 1].ts || Date.now() / 1000) * 1000
+    : Date.now();
+  const expectedNow = expectedKw(latestTsMs);
+  const efficiency = expectedNow > 0.1 ? Math.min(100, Math.max(0, (latestPower / expectedNow) * 100)) : 0;
+  const efficiencyDetail = efficiency >= 92 ? 'Near nominal' : efficiency >= 70 ? 'Expected for conditions' : efficiency >= 40 ? 'Derated output' : 'Below nominal';
+
+  // Integrate the live telemetry stream (kW) to kWh earned this session
+  const tariffEur = 0.15;
+  let sessionKwh = 0;
+  for (let i = 1; i < telemetryData.length; i++) {
+    const p0 = Number(telemetryData[i - 1]?.power_kw ?? telemetryData[i - 1]?.power ?? telemetryData[i - 1]?.value ?? 0);
+    const p1 = Number(telemetryData[i]?.power_kw ?? telemetryData[i]?.power ?? telemetryData[i]?.value ?? 0);
+    const t0 = (telemetryData[i - 1].timestamp || telemetryData[i - 1].ts || 0) * 1000;
+    const t1 = (telemetryData[i].timestamp || telemetryData[i].ts || 0) * 1000;
+    sessionKwh += ((p0 + p1) / 2) * ((t1 - t0) / 3600000);
+  }
+  const revenue = sessionKwh * tariffEur;
+  const irradiance = Math.round((latestPower / CAPACITY_KW) * 950);
+  const panelTemp = Math.round(27 + irradiance / 42);
 
   return (
     <div className="power-chart-container">
@@ -136,32 +186,32 @@ const PowerChart: React.FC<PowerChartProps> = ({ telemetryData }) => {
             <div className="analysis-icon">☀️</div>
             <div className="analysis-content">
               <div className="analysis-title">Solar Irradiance</div>
-              <div className="analysis-value">875 W/m²</div>
-              <div className="analysis-detail">Optimal conditions</div>
+              <div className="analysis-value">{irradiance} W/m²</div>
+              <div className="analysis-detail">{irradiance > 700 ? 'Optimal conditions' : irradiance > 250 ? 'Partly cloudy' : 'Low light'}</div>
             </div>
           </div>
           <div className="analysis-card">
             <div className="analysis-icon">🌡️</div>
             <div className="analysis-content">
               <div className="analysis-title">Panel Temperature</div>
-              <div className="analysis-value">42°C</div>
-              <div className="analysis-detail">Within normal range</div>
+              <div className="analysis-value">{panelTemp}°C</div>
+              <div className="analysis-detail">{panelTemp < 65 ? 'Within normal range' : 'Thermal derating likely'}</div>
             </div>
           </div>
           <div className="analysis-card">
             <div className="analysis-icon">⚙️</div>
             <div className="analysis-content">
               <div className="analysis-title">System Efficiency</div>
-              <div className="analysis-value">94.2%</div>
-              <div className="analysis-detail">Above average</div>
+              <div className="analysis-value">{telemetryData.length > 0 ? efficiency.toFixed(1) : '—'}%</div>
+              <div className="analysis-detail">{telemetryData.length > 0 ? efficiencyDetail : 'Waiting for telemetry'}</div>
             </div>
           </div>
           <div className="analysis-card">
             <div className="analysis-icon">💰</div>
             <div className="analysis-content">
-              <div className="analysis-title">Today's Revenue</div>
-              <div className="analysis-value">$12.45</div>
-              <div className="analysis-detail">$0.15/kWh rate</div>
+              <div className="analysis-title">Session Revenue</div>
+              <div className="analysis-value">${revenue.toFixed(2)}</div>
+              <div className="analysis-detail">${tariffEur.toFixed(2)}/kWh · {sessionKwh.toFixed(2)} kWh this session</div>
             </div>
           </div>
         </div>

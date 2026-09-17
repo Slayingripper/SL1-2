@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN mkdir -p /opt/pv-controller/logs
 
-RUN pip install --no-cache-dir flask flask-cors paho-mqtt pymodbus
+RUN pip install --no-cache-dir flask flask-cors paho-mqtt "pymodbus==3.11.2"
 
 COPY server.py $APP_DIR/
 COPY server_cyber_range.py $APP_DIR/

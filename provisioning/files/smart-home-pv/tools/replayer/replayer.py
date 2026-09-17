@@ -9,9 +9,29 @@ from scapy.all import wrpcap, Ether, IP
 
 SERVER = os.environ.get('PV_SERVER', 'http://pv-controller')
 PCAP_PATH = os.environ.get('PCAP_PATH', '/opt/pv-controller/logs/modbus.pcap')
-POLL_INTERVAL = int(os.environ.get('REPLAYER_POLL_INTERVAL', '3'))
+POLL_INTERVAL = int(os.environ.get('REPLAYER_POLL_INTERVAL', '10'))
 
 print('Replayer starting: pcap=', PCAP_PATH, 'server=', SERVER)
+
+# Cache the last read pcap + mtime so we only re-read when it changed
+_pcap_cache = {'mtime': None, 'pkts': None}
+
+
+def load_pcap(path):
+    """Read the pcap only if it changed on disk (keeps idle polling cheap)."""
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = None
+    if _pcap_cache['pkts'] is None or mtime != _pcap_cache['mtime']:
+        try:
+            _pcap_cache['pkts'] = rdpcap(path)
+            _pcap_cache['mtime'] = mtime
+        except Exception as e:
+            print('read pcap failed', e)
+            return None
+    return _pcap_cache['pkts']
+
 
 # Helper: send raw tcp payload to dest
 def send_tcp(dst_ip, dst_port, payload):
@@ -34,10 +54,8 @@ while True:
         r = requests.get(f"{SERVER}/replayer/state", timeout=5)
         if r.status_code == 200 and r.json().get('running'):
             print('Replayer: running - reading pcap', PCAP_PATH)
-            try:
-                pkts = rdpcap(PCAP_PATH)
-            except Exception as e:
-                print('read pcap failed', e)
+            pkts = load_pcap(PCAP_PATH)
+            if pkts is None:
                 # If pcap missing, generate a minimal Modbus pcap to replay
                 try:
                     print('Generating fallback Modbus PCAP...')
@@ -57,22 +75,21 @@ while True:
                         tcp = TCP(sport=12346+i, dport=15002, flags='PA', seq=1)
                         frames.append(ether/ip/tcp/Raw(load=adu))
                     wrpcap(PCAP_PATH, frames)
-                    pkts = rdpcap(PCAP_PATH)
+                    pkts = load_pcap(PCAP_PATH)
                 except Exception as e:
                     print('fallback generation failed', e)
+                if not pkts:
                     time.sleep(POLL_INTERVAL)
                     continue
-                time.sleep(POLL_INTERVAL)
-                continue
-            # Replay frames by performing TCP/UDP send of raw payloads
+            # Replay frames once per start trigger by performing TCP/UDP send of raw payloads
             last_ts = None
             for p in pkts:
                 ts = float(getattr(p, 'time', time.time()))
                 if last_ts and ts > last_ts:
-                    time.sleep(min(1.0, ts - last_ts))
+                    time.sleep(min(0.25, ts - last_ts))
                 last_ts = ts
                 if TCP in p and Raw in p:
-                    dst_ip = p[ 'IP'].dst
+                    dst_ip = p['IP'].dst
                     dst_port = p['TCP'].dport
                     payload = bytes(p[Raw].load)
                     print('replaying TCP->', dst_ip, dst_port, 'len', len(payload))
@@ -85,7 +102,7 @@ while True:
                 elif UDP in p and Raw in p:
                     # Not implemented in this simple replayer
                     pass
-            # After playing once, log to server
+            # After playing once, notify the server (marks last_played) and stop
             try:
                 requests.post(f"{SERVER}/replayer/state", timeout=2)
             except Exception:
@@ -96,6 +113,9 @@ while True:
             except Exception:
                 pass
             print('Replay finished; waiting for next check')
+            # One-shot: pause briefly so a still-running flag doesn't cause an
+            # immediate tight replay loop
+            time.sleep(max(POLL_INTERVAL, 5))
         time.sleep(POLL_INTERVAL)
     except Exception as e:
         print('Replayer main loop error', e)

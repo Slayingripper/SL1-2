@@ -151,7 +151,7 @@ window.addEventListener('DOMContentLoaded', ()=>{
   loadTelemetry();
   loadVictimStatus();
   checkNotifications(); // Check for notifications on load
-  setInterval(checkNotifications, 3000); // Poll every 3 seconds
+  setInterval(checkNotifications, 8000); // Poll every 8 seconds
   
   document.getElementById('device-form').addEventListener('submit', async (ev)=>{
     ev.preventDefault();
