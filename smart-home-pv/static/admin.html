@@ -1,0 +1,79 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>PV Admin Panel (Simulated)</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; padding: 1rem; }
+    .container { max-width: 900px; margin: 0 auto; }
+    input { padding: .5rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>PV Inverter - Admin Panel (Simulated)</h2>
+    <div id="login">
+      <h3>Login</h3>
+      <form id="loginForm">
+        <label for="user">Username</label>
+        <input type="text" id="user" value="admin" /><br/>
+        <label for="pass">Password</label>
+        <input type="password" id="pass" value="super-secret-123" /><br/>
+        <button id="loginBtn" type="submit">Login</button>
+      </form>
+      <div id="loginMsg"></div>
+    </div>
+
+    <div id="dashboard" style="display:none">
+      <h3>MQTT Status</h3>
+      <canvas id="mqttChart" width="800" height="300"></canvas>
+      <button id="refreshBtn">Refresh Data</button>
+      <h4>Actions</h4>
+      <button id="haltBtn">Send HALT</button>
+      <a href="/logs/traffic.pcap" target="_blank">Download traffic pcap</a>
+      <p id="actionMsg"></p>
+    </div>
+  </div>
+  <script>
+    const loginForm = document.getElementById('loginForm');
+    const loginMsg = document.getElementById('loginMsg');
+    const loginDiv = document.getElementById('login');
+    const dashboard = document.getElementById('dashboard');
+    let token = '';
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const user = document.getElementById('user').value;
+      const pass = document.getElementById('pass').value;
+      loginMsg.textContent = 'Logging in...';
+      const res = await fetch('/api/login', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({username:user, password:pass}) });
+      const data = await res.json();
+      if (res.status === 200 && data.token) {
+        token = data.token;
+        loginMsg.textContent = 'Logged in';
+        loginDiv.style.display = 'none';
+        dashboard.style.display = 'block';
+        loadChart();
+      } else { loginMsg.textContent = JSON.stringify(data); }
+    });
+
+    let chart;
+    async function loadChart() {
+      const raw = await fetch('/admin/mqtt_data');
+      const series = await raw.json();
+      const ctx = document.getElementById('mqttChart').getContext('2d');
+      const labels = series.map(p => new Date(p.ts*1000).toLocaleTimeString());
+      const values = series.map(p => p.value=== 'HALTED' ? 0 : 1);
+      if (chart) chart.destroy();
+      chart = new Chart(ctx, {type: 'line', data: {labels, datasets:[{ label: 'PV State (1=RUNNING, 0=HALTED)', data: values, fill:false, borderColor:'red'}]}});
+    }
+
+    document.getElementById('refreshBtn').addEventListener('click', loadChart);
+    document.getElementById('haltBtn').addEventListener('click', async () => {
+      const res = await fetch('/api/hub/command', { method: 'POST', headers: { 'Content-Type':'application/json', 'Authorization': 'Bearer '+token }, body: JSON.stringify({command:'HALT'}) });
+      const data = await res.json();
+      document.getElementById('actionMsg').textContent = JSON.stringify(data);
+    });
+  </script>
+</body>
+</html>

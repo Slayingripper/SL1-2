@@ -1,0 +1,2 @@
+./tutorial_attack_walkthrough.sh: line 30: /home/mastros/gitstuff/SL1-2/provisioning/files/smart-home-pv/tools/attacker/session.log: Permission denied
+[1;33m[!] Warning:[0m cannot write /home/mastros/gitstuff/SL1-2/provisioning/files/smart-home-pv/tools/attacker/session.log; continuing without session logging.

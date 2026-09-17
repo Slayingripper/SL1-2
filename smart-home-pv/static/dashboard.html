@@ -1,0 +1,74 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>PV Admin Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/static/style.css" />
+    <!-- Chart.js CDN (fallback to local if no internet in lab) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+  </head>
+  <body>
+    <!-- Notification Container -->
+    <div id="notification-container" class="notification-container"></div>
+    
+    <header class="site-header">
+      <div class="header-left">
+        <h1>PV Admin Dashboard</h1>
+        <p class="sub">Operational view & control for PV Inverters</p>
+      </div>
+      <div class="header-right">
+        <button id="refresh-btn" class="btn">Refresh</button>
+        <button id="pcap-btn" class="btn">Download PCAP</button>
+        <button id="halt-btn" class="btn warn">HALT</button>
+        <button id="restart-btn" class="btn">RESTART</button>
+      </div>
+    </header>
+    <main class="content">
+      <aside class="sidebar">
+        <section class="card">
+          <h2>Devices</h2>
+          <div id="devices"></div>
+          <form id="device-form" class="device-form">
+            <input id="device-name" placeholder="device name" class="input" />
+            <input id="device-desc" placeholder="device description" class="input" />
+            <button type="submit" class="btn">Add device</button>
+          </form>
+        </section>
+        <section class="card">
+          <h2>Victim Console</h2>
+          <div id="victim-status">No logs yet</div>
+          <button id="victim-refresh" class="btn">Refresh Victim Logs</button>
+        </section>
+        <section class="card">
+          <h2>Replayer</h2>
+          <div id="replayer-status">Stopped</div>
+          <div style="display:flex;gap:0.5rem;margin-top:0.5rem"><button id="replayer-start" class="btn">Start Replay</button><button id="replayer-stop" class="btn">Stop Replay</button></div>
+        </section>
+        <section class="card">
+          <h2>Logs</h2>
+          <pre id="log-output">(recent logs)</pre>
+        </section>
+      </aside>
+      <section class="main-panel">
+        <div class="card">
+          <h2>Telemetry - Real-time</h2>
+          <canvas id="telemetry-chart" height="140"></canvas>
+          <div style="display:flex;gap:0.5rem;margin-top:0.5rem;align-items:center">
+            <input id="publish-value" type="number" placeholder="power (W)" class="input" style="width:120px" />
+            <button id="publish-test" class="btn">Publish Telemetry</button>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Current Status</h2>
+          <div class="status-box">
+            <div id="pv-status"></div>
+            <div id="pv-power"></div>
+            <div id="pv-session"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="/static/dashboard.js"></script>
+  </body>
+</html>
