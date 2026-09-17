@@ -322,21 +322,29 @@ class ChallengeState:
             # Keep last 100 events
             if len(self.security_events) > 100:
                 self.security_events = self.security_events[-100:]
-            # Raise an HMI popup notification so the operator sees it immediately.
-            # The notification 'type' mirrors the severity so the blue-team alert
-            # tier filter decides which media produce audible/visual popups.
+            # Raise an HMI popup notification so the operator sees it immediately,
+            # but only when the event meets the blue-team alert tier. When the
+            # defense is inactive the tier is ignored and everything pops (the
+            # insecure default). Severity order: low < medium < high < critical.
             try:
-                self.notification_seq += 1
-                self.notifications.append({
-                    'id': self.notification_seq,
-                    'timestamp': event['timestamp'],
-                    'type': severity.lower(),
-                    'title': f"{category}: {message}",
-                    'message': details or message,
-                    'read': False,
-                })
-                if len(self.notifications) > 20:
-                    self.notifications = self.notifications[-20:]
+                _SEV_RANK = {'low': 0, 'medium': 1, 'high': 2, 'critical': 3}
+                ev_rank = _SEV_RANK.get(severity.lower(), 0)
+                tier = 'low'
+                if blueteam_defense['active']:
+                    tier = blueteam_defense['settings'].get('alert_notification_tier', 'low')
+                tier_rank = _SEV_RANK.get(str(tier).lower(), 0)
+                if ev_rank >= tier_rank:
+                    self.notification_seq += 1
+                    self.notifications.append({
+                        'id': self.notification_seq,
+                        'timestamp': event['timestamp'],
+                        'type': severity.lower(),
+                        'title': f"{category}: {message}",
+                        'message': details or message,
+                        'read': False,
+                    })
+                    if len(self.notifications) > 20:
+                        self.notifications = self.notifications[-20:]
             except Exception:
                 logger.exception("Failed to raise HMI notification for security event")
             # Suspicious incidents automatically raise a ticket for admin triage
@@ -844,8 +852,11 @@ def defense_middleware():
             data = request.get_json(silent=True) or {}
             payload = json.dumps(data)
         elif request.form:
-            payload = request.form.to_dict(flat=False).values().__repr__()
-        query = request.query_string.decode('utf-8', 'ignore')
+            payload = repr(list(request.form.to_dict(flat=False).values()))
+        # Inspect the URL-decoded query values, not the raw percent-encoded
+        # string, so encoded payloads like %3Cscript%3E are caught.
+        query = ' '.join(request.args.keys()) + ' ' + ' '.join(
+            v for vals in request.args.listvalues() for v in vals)
         if request_has_xss_or_sqli(request.path, query, payload):
             try:
                 write_action_log('xss_attempt_blocked',

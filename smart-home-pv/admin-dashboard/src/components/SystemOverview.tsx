@@ -152,6 +152,7 @@ const SystemOverview: React.FC<SystemOverviewProps> = ({
   const sceneNow = now || new Date();
   const [notifFeed, setNotifFeed] = useState<DashNotification[]>([]);
   const [assetId, setAssetId] = useState('controller');
+  const [section, setSection] = useState<'summary' | 'production' | 'equipment' | 'alerts'>('summary');
 
   useEffect(() => {
     let cancelled = false;
@@ -318,6 +319,7 @@ const SystemOverview: React.FC<SystemOverviewProps> = ({
 
   const view = assetId === 'controller' ? buildControllerView() : buildSiteView(assetId);
   const capacityPct = Math.round((view.currentPower / view.capacityKw) * 100);
+  const unreadCount = notifFeed.filter(n => !n.read).length;
 
   return (
     <div className="system-overview">
@@ -352,118 +354,148 @@ const SystemOverview: React.FC<SystemOverviewProps> = ({
         <div className="halt-banner">{view.banner}</div>
       )}
 
-      <div className="metrics-grid">
-        <div className="metric-card metric-primary">
-          <div className="metric-icon">{view.consumer ? '🏭' : '☀️'}</div>
-          <div className="metric-content">
-            <div className="metric-label">{view.powerLabel}</div>
-            <div className="metric-value">{view.currentPower.toFixed(2)} <span className="metric-unit">kW</span></div>
-            <div className="capacity-bar" title={`${capacityPct}% of ${view.capacityKw} kW rated`}>
-              <div className={`capacity-fill ${view.halted || view.stale ? 'halted' : ''}`} style={{ width: `${Math.min(100, capacityPct)}%` }} />
-            </div>
-            <div className="metric-info">{capacityPct}% of {view.capacityKw.toFixed(1)} kW rated {view.consumer ? 'feed' : 'capacity'}</div>
-          </div>
-        </div>
+      <nav className="ov-subtabs">
+        {([
+          ['summary', 'Summary'],
+          ['production', 'Production'],
+          ['equipment', 'Equipment'],
+          ['alerts', 'Alerts'],
+        ] as [typeof section, string][]).map(([key, label]) => (
+          <button
+            key={key}
+            className={`ov-subtab ${section === key ? 'active' : ''}`}
+            onClick={() => setSection(key)}
+          >
+            {label}
+            {key === 'alerts' && unreadCount > 0 && <span className="ov-subtab-badge">{unreadCount}</span>}
+          </button>
+        ))}
+      </nav>
 
-        <div className="metric-card">
-          <div className="metric-icon">🔋</div>
-          <div className="metric-content">
-            <div className="metric-label">Energy Today</div>
-            <div className="metric-value">{integrateToday(view.profile).toFixed(2)} <span className="metric-unit">kWh</span></div>
-            <div className="metric-sub">{view.energySub}</div>
-          </div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-icon">📉</div>
-          <div className="metric-content">
-            <div className="metric-label">{view.ratioLabel}</div>
-            <div className="metric-value">
-              {view.consumer
-                ? Math.min(100, Math.round((view.avgPower / view.capacityKw) * 100))
-                : (view.halted || view.stale) ? 0
-                : Math.min(99, Math.round((view.currentPower / (view.capacityKw * Math.max(0.08, elevationFactor(hNow)))) * 92))}
-              <span className="metric-unit">%</span>
-            </div>
-            <div className="metric-sub">{view.avgPower.toFixed(2)} kW session average · {view.samples} samples</div>
-          </div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-icon">🔌</div>
-          <div className="metric-content">
-            <div className="metric-label">Grid Connection</div>
-            <div className={`metric-value ${view.halted || view.stale ? 'status-warn' : 'status-connected'}`}>{view.statusWord}</div>
-            <div className="metric-info">
-              {view.voltage.toFixed(1)} V · {view.current.toFixed(1)} A · 50.0 Hz
+      {section === 'summary' && (
+        <div className="metrics-grid">
+          <div className="metric-card metric-primary">
+            <div className="metric-icon">{view.consumer ? '🏭' : '☀️'}</div>
+            <div className="metric-content">
+              <div className="metric-label">{view.powerLabel}</div>
+              <div className="metric-value">{view.currentPower.toFixed(2)} <span className="metric-unit">kW</span></div>
+              <div className="capacity-bar" title={`${capacityPct}% of ${view.capacityKw} kW rated`}>
+                <div className={`capacity-fill ${view.halted || view.stale ? 'halted' : ''}`} style={{ width: `${Math.min(100, capacityPct)}%` }} />
+              </div>
+              <div className="metric-info">{capacityPct}% of {view.capacityKw.toFixed(1)} kW rated {view.consumer ? 'feed' : 'capacity'}</div>
             </div>
           </div>
-        </div>
-      </div>
 
-      <div className="overview-columns">
-        <div className="info-panel">
-          <h3>{view.curveTitle}</h3>
-          <PowerChartMini peakKw={view.peakKw} halted={view.halted} profile={view.profile} fullDay={view.fullDayCurve} />
-          <div className="curve-legend"><span>— projected {view.consumer ? 'load' : 'output'}</span><span style={{ color: '#ffbd59' }}>— now</span></div>
-        </div>
+          <div className="metric-card">
+            <div className="metric-icon">🔋</div>
+            <div className="metric-content">
+              <div className="metric-label">Energy Today</div>
+              <div className="metric-value">{integrateToday(view.profile).toFixed(2)} <span className="metric-unit">kWh</span></div>
+              <div className="metric-sub">{view.energySub}</div>
+            </div>
+          </div>
 
-        <div className="info-panel">
-          <h3>System Information</h3>
-          <div className="info-grid">
-            {view.sysinfo.map(row => (
-              <div className="info-row" key={row.key}>
-                <span className="info-key">{row.key}</span>
-                <span className={`info-value ${row.code ? 'code' : ''}`}>{row.value}</span>
+          <div className="metric-card">
+            <div className="metric-icon">📉</div>
+            <div className="metric-content">
+              <div className="metric-label">{view.ratioLabel}</div>
+              <div className="metric-value">
+                {view.consumer
+                  ? Math.min(100, Math.round((view.avgPower / view.capacityKw) * 100))
+                  : (view.halted || view.stale) ? 0
+                  : Math.min(99, Math.round((view.currentPower / (view.capacityKw * Math.max(0.08, elevationFactor(hNow)))) * 92))}
+                <span className="metric-unit">%</span>
+              </div>
+              <div className="metric-sub">{view.avgPower.toFixed(2)} kW session average · {view.samples} samples</div>
+            </div>
+          </div>
+
+          <div className="metric-card">
+            <div className="metric-icon">🔌</div>
+            <div className="metric-content">
+              <div className="metric-label">Grid Connection</div>
+              <div className={`metric-value ${view.halted || view.stale ? 'status-warn' : 'status-connected'}`}>{view.statusWord}</div>
+              <div className="metric-info">
+                {view.voltage.toFixed(1)} V · {view.current.toFixed(1)} A · 50.0 Hz
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {section === 'production' && (
+        <div className="info-panels">
+          <div className="info-panel info-panel-wide">
+            <h3>{view.curveTitle}</h3>
+            <PowerChartMini peakKw={view.peakKw} halted={view.halted} profile={view.profile} fullDay={view.fullDayCurve} />
+            <div className="curve-legend"><span>— projected {view.consumer ? 'load' : 'output'}</span><span style={{ color: '#ffbd59' }}>— now</span></div>
+          </div>
+        </div>
+      )}
+
+      {section === 'equipment' && (
+        <>
+          <div className="info-panels">
+            <div className="info-panel info-panel-wide">
+              <h3>System Information</h3>
+              <div className="info-grid">
+                {view.sysinfo.map(row => (
+                  <div className="info-row" key={row.key}>
+                    <span className="info-key">{row.key}</span>
+                    <span className={`info-value ${row.code ? 'code' : ''}`}>{row.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="info-panels">
+            <div className="info-panel info-panel-wide">
+              <h3>{view.consumer ? 'Installation Units' : 'Plant Units'}</h3>
+              <table className="units-table">
+                <thead><tr><th>Unit</th><th>Description</th><th>Status</th><th>Reading</th></tr></thead>
+                <tbody>
+                  {view.units.map(u => (
+                    <tr key={u.id}>
+                      <td className="code">{u.id}</td>
+                      <td>{u.name}</td>
+                      <td><span className={`unit-dot unit-${u.status}`} /> {u.status.toUpperCase()}</td>
+                      <td>{u.value}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {section === 'alerts' && (
+        <div className="alert-section">
+          <h3>System Alerts &amp; Notifications</h3>
+          <div className="alert-list">
+            {notifFeed.length === 0 ? (
+              <div className="alert alert-info">
+                <span className="alert-icon">ℹ️</span>
+                <div className="alert-content">
+                  <div className="alert-title">No recent notifications</div>
+                  <div className="alert-message">PV controller operating normally. All systems functional.</div>
+                  <div className="alert-time">just now</div>
+                </div>
+              </div>
+            ) : notifFeed.map(n => (
+              <div key={n.id} className={`alert ${n.read ? 'alert-info' : 'alert-warning'}`}>
+                <span className="alert-icon">{n.read ? '✓' : '⚠️'}</span>
+                <div className="alert-content">
+                  <div className="alert-title">{n.title}</div>
+                  <div className="alert-message">{n.message}</div>
+                  <div className="alert-time">{new Date(n.timestamp).toLocaleString()}</div>
+                </div>
               </div>
             ))}
           </div>
         </div>
-      </div>
-
-      <div className="info-panels">
-        <div className="info-panel info-panel-wide">
-          <h3>{view.consumer ? 'Installation Units' : 'Plant Units'}</h3>
-          <table className="units-table">
-            <thead><tr><th>Unit</th><th>Description</th><th>Status</th><th>Reading</th></tr></thead>
-            <tbody>
-              {view.units.map(u => (
-                <tr key={u.id}>
-                  <td className="code">{u.id}</td>
-                  <td>{u.name}</td>
-                  <td><span className={`unit-dot unit-${u.status}`} /> {u.status.toUpperCase()}</td>
-                  <td>{u.value}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="alert-section">
-        <h3>System Alerts &amp; Notifications</h3>
-        <div className="alert-list">
-          {notifFeed.length === 0 ? (
-            <div className="alert alert-info">
-              <span className="alert-icon">ℹ️</span>
-              <div className="alert-content">
-                <div className="alert-title">No recent notifications</div>
-                <div className="alert-message">PV controller operating normally. All systems functional.</div>
-                <div className="alert-time">just now</div>
-              </div>
-            </div>
-          ) : notifFeed.map(n => (
-            <div key={n.id} className={`alert ${n.read ? 'alert-info' : 'alert-warning'}`}>
-              <span className="alert-icon">{n.read ? '✓' : '⚠️'}</span>
-              <div className="alert-content">
-                <div className="alert-title">{n.title}</div>
-                <div className="alert-message">{n.message}</div>
-                <div className="alert-time">{new Date(n.timestamp).toLocaleString()}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
     </div>
   );
 };

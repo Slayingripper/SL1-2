@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import axios from 'axios';
 import './BlueTeamDashboard.css';
 
@@ -24,12 +24,6 @@ interface DefenseSettings {
   inactivity_timeout_minutes: number;
 }
 
-interface OperatorUser {
-  username: string;
-  role: string;
-  description: string;
-}
-
 interface SecurityEvent {
   timestamp: string;
   severity: string;
@@ -39,6 +33,26 @@ interface SecurityEvent {
   source?: string;
   ip?: string;
 }
+
+interface OperatorUser {
+  username: string;
+  role: string;
+  description: string;
+}
+
+interface UserTicket {
+  id: number;
+  created: string;
+  subject: string;
+  description: string;
+  reporter: string;
+  source: 'user' | 'security_monitor';
+  category?: string | null;
+  ip?: string | null;
+  status: 'open' | 'investigating' | 'resolved' | 'closed';
+}
+
+const TICKET_STATUS_FLOW: UserTicket['status'][] = ['open', 'investigating', 'resolved', 'closed'];
 
 const DEFAULT_SETTINGS: DefenseSettings = {
   login_rate_limit: false,
@@ -56,6 +70,16 @@ const DEFAULT_SETTINGS: DefenseSettings = {
   ip_blacklist: [],
   inactivity_timeout_minutes: 5,
 };
+
+const severityClass = (sev?: string | null) => {
+  const s = (sev || '').toLowerCase();
+  if (s === 'critical') return 'sev-critical';
+  if (s === 'high') return 'sev-high';
+  if (s === 'medium') return 'sev-medium';
+  return 'sev-low';
+};
+
+/* ── Reusable pieces ─────────────────────────────────────── */
 
 const Toggle: React.FC<{ checked: boolean; onChange: (v: boolean) => void }> = ({ checked, onChange }) => (
   <button
@@ -104,7 +128,32 @@ const IpListEditor: React.FC<{
   );
 };
 
-const UserPasswordCard: React.FC<{
+/** Collapsible section used to structure every tab */
+const Section: React.FC<{
+  title: string;
+  subtitle?: string;
+  badge?: string;
+  badgeTone?: 'ok' | 'warn' | 'off' | 'crit';
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}> = ({ title, subtitle, badge, badgeTone = 'off', defaultOpen = false, children }) => {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className={`bt-acc ${open ? 'open' : ''}`}>
+      <button type="button" className="bt-acc-header" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="bt-acc-chevron">{open ? '▾' : '▸'}</span>
+        <span className="bt-acc-titles">
+          <span className="bt-acc-title">{title}</span>
+          {subtitle && <span className="bt-acc-sub">{subtitle}</span>}
+        </span>
+        {badge && <span className={`bt-acc-badge tone-${badgeTone}`}>{badge}</span>}
+      </button>
+      {open && <div className="bt-acc-body">{children}</div>}
+    </section>
+  );
+};
+
+const UserAccount: React.FC<{
   user: OperatorUser;
   token: string;
   onExpired: () => void;
@@ -139,30 +188,31 @@ const UserPasswordCard: React.FC<{
   };
 
   return (
-    <section className="bt-panel bt-user-card">
-      <div className="bt-user-head">
-        <div className="bt-user-avatar">{user.username.slice(0, 2).toUpperCase()}</div>
-        <div>
-          <div className="bt-control-title">{user.username}</div>
-          <span className={`bt-role-badge role-${user.role}`}>{user.role.toUpperCase()}</span>
-        </div>
+    <Section
+      title={user.username}
+      subtitle={user.description}
+      badge={user.role.toUpperCase()}
+      badgeTone={user.role === 'blueteam' ? 'ok' : 'warn'}
+    >
+      <div className="bt-user-form">
+        <label className="bt-field">
+          <span>NEW PASSWORD (MIN 6 CHARS)</span>
+          <input type="password" placeholder="new password" value={newPw} onChange={e => setNewPw(e.target.value)} />
+        </label>
+        <label className="bt-field">
+          <span>CONFIRM NEW PASSWORD</span>
+          <input type="password" placeholder="confirm new password" value={confirmPw} onChange={e => setConfirmPw(e.target.value)} />
+        </label>
+        {message && <div className={`bt-pw-msg ${message.ok ? 'ok' : 'err'}`}>{message.text}</div>}
+        <button type="button" className="bt-btn-secondary" disabled={busy} onClick={reset}>
+          RESET PASSWORD
+        </button>
       </div>
-      <p className="bt-panel-note">{user.description}</p>
-      <label className="bt-field">
-        <span>NEW PASSWORD (MIN 6 CHARS)</span>
-        <input type="password" placeholder="new password" value={newPw} onChange={e => setNewPw(e.target.value)} />
-      </label>
-      <label className="bt-field">
-        <span>CONFIRM NEW PASSWORD</span>
-        <input type="password" placeholder="confirm new password" value={confirmPw} onChange={e => setConfirmPw(e.target.value)} />
-      </label>
-      {message && <div className={`bt-pw-msg ${message.ok ? 'ok' : 'err'}`}>{message.text}</div>}
-      <button type="button" className="bt-btn-secondary" disabled={busy} onClick={reset}>
-        RESET PASSWORD
-      </button>
-    </section>
+    </Section>
   );
 };
+
+/* ── Main console ────────────────────────────────────────── */
 
 const BlueTeamDashboard: React.FC<BlueTeamDashboardProps> = ({ token, onLogout }) => {
   const [settings, setSettings] = useState<DefenseSettings>(DEFAULT_SETTINGS);
@@ -173,10 +223,19 @@ const BlueTeamDashboard: React.FC<BlueTeamDashboardProps> = ({ token, onLogout }
   const [now, setNow] = useState(new Date());
   const [sessionLeft, setSessionLeft] = useState(5 * 60);
   const [applyFlash, setApplyFlash] = useState('');
-  const [tab, setTab] = useState<'defenses' | 'users'>('defenses');
+  const [tab, setTab] = useState<'defenses' | 'users' | 'tickets'>('defenses');
   const [users, setUsers] = useState<OperatorUser[]>([]);
-  const loggedOut = useRef(false);
+  const [tickets, setTickets] = useState<UserTicket[]>([]);
+  const [ticketsLoaded, setTicketsLoaded] = useState(false);
 
+  // Search & filter state
+  const [eventQuery, setEventQuery] = useState('');
+  const [eventSeverity, setEventSeverity] = useState('all');
+  const [eventCategory, setEventCategory] = useState('all');
+  const [ticketQuery, setTicketQuery] = useState('');
+  const [ticketStatus, setTicketStatus] = useState('all');
+
+  const loggedOut = useRef(false);
   const authHeaders = { Authorization: `Bearer ${token}` };
 
   const handleExpired = useCallback(() => {
@@ -218,18 +277,6 @@ const BlueTeamDashboard: React.FC<BlueTeamDashboardProps> = ({ token, onLogout }
   }, []);
 
   useEffect(() => {
-    if (tab !== 'users') return;
-    (async () => {
-      try {
-        const resp = await axios.get('/api/blueteam/users', { headers: authHeaders });
-        setUsers(resp.data.users || []);
-      } catch (err: any) {
-        if (err?.response?.status === 401) handleExpired();
-      }
-    })();
-  }, [tab]);
-
-  useEffect(() => {
     const tick = setInterval(() => {
       setNow(new Date());
       setSessionLeft(prev => {
@@ -242,6 +289,35 @@ const BlueTeamDashboard: React.FC<BlueTeamDashboardProps> = ({ token, onLogout }
     }, 1000);
     return () => clearInterval(tick);
   }, [handleExpired]);
+
+  useEffect(() => {
+    if (tab !== 'users') return;
+    (async () => {
+      try {
+        const resp = await axios.get('/api/blueteam/users', { headers: authHeaders });
+        setUsers(resp.data.users || []);
+      } catch (err: any) {
+        if (err?.response?.status === 401) handleExpired();
+      }
+    })();
+  }, [tab]);
+
+  useEffect(() => {
+    if (tab !== 'tickets') return;
+    const loadTickets = async () => {
+      try {
+        const resp = await axios.get('/api/admin/tickets', { headers: authHeaders });
+        setTickets((resp.data.tickets || []).filter((t: UserTicket) => t.source === 'user'));
+      } catch (err: any) {
+        if (err?.response?.status === 401) handleExpired();
+      } finally {
+        setTicketsLoaded(true);
+      }
+    };
+    loadTickets();
+    const iv = setInterval(loadTickets, 10000);
+    return () => clearInterval(iv);
+  }, [tab]);
 
   const set = <K extends keyof DefenseSettings>(key: K, value: DefenseSettings[K]) => {
     setSettings(prev => ({ ...prev, [key]: value }));
@@ -280,18 +356,53 @@ const BlueTeamDashboard: React.FC<BlueTeamDashboardProps> = ({ token, onLogout }
     }
   };
 
+  const setTicketStatusApi = async (id: number, status: UserTicket['status']) => {
+    try {
+      await axios.post(`/api/admin/tickets/${id}/status`, { status }, { headers: authHeaders });
+      setTickets(prev => prev.map(t => (t.id === id ? { ...t, status } : t)));
+    } catch (err: any) {
+      if (err?.response?.status === 401) handleExpired();
+    }
+  };
+
+  /* ── Derived data: search & filters ─────────────────────── */
+
+  const eventCategories = useMemo(
+    () => Array.from(new Set(events.map(ev => ev.category).filter(Boolean))).sort(),
+    [events]
+  );
+
+  const filteredEvents = useMemo(() => events.filter(ev => {
+    if (eventSeverity !== 'all' && (ev.severity || '').toLowerCase() !== eventSeverity) return false;
+    if (eventCategory !== 'all' && ev.category !== eventCategory) return false;
+    const q = eventQuery.trim().toLowerCase();
+    if (q) {
+      const blob = `${ev.message} ${ev.details || ''} ${ev.category} ${ev.source || ''} ${ev.ip || ''}`.toLowerCase();
+      if (!blob.includes(q)) return false;
+    }
+    return true;
+  }), [events, eventQuery, eventSeverity, eventCategory]);
+
+  const filteredTickets = useMemo(() => tickets.filter(t => {
+    if (ticketStatus !== 'all' && t.status !== ticketStatus) return false;
+    const q = ticketQuery.trim().toLowerCase();
+    if (q) {
+      const blob = `${t.subject} ${t.description} ${t.reporter} ${t.ip || ''}`.toLowerCase();
+      if (!blob.includes(q)) return false;
+    }
+    return true;
+  }), [tickets, ticketQuery, ticketStatus]);
+
+  const openTickets = tickets.filter(t => t.status === 'open' || t.status === 'investigating').length;
+
   const fmtClock = now.toLocaleTimeString('en-GB', { hour12: false });
   const fmtDate = now.toLocaleDateString('en-GB', { month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase();
   const sessionMin = String(Math.floor(sessionLeft / 60)).padStart(2, '0');
   const sessionSec = String(sessionLeft % 60).padStart(2, '0');
 
-  const severityClass = (sev: string) => {
-    const s = (sev || '').toLowerCase();
-    if (s === 'critical') return 'sev-critical';
-    if (s === 'high') return 'sev-high';
-    if (s === 'medium') return 'sev-medium';
-    return 'sev-low';
-  };
+  const onOff = (on: boolean) => (on ? 'ENABLED' : 'DISABLED');
+  const onOffTone = (on: boolean) => (on ? 'ok' : 'off') as 'ok' | 'off';
+  const networkEnabled = Number(settings.ip_blacklist_enabled) + Number(settings.ip_whitelist_enabled);
 
   return (
     <div className="bt-console">
@@ -324,44 +435,38 @@ const BlueTeamDashboard: React.FC<BlueTeamDashboardProps> = ({ token, onLogout }
       </div>
 
       <nav className="bt-tabs">
-        <button
-          type="button"
-          className={`bt-tab ${tab === 'defenses' ? 'active' : ''}`}
-          onClick={() => setTab('defenses')}
-        >
-          DEFENSES
-        </button>
-        <button
-          type="button"
-          className={`bt-tab ${tab === 'users' ? 'active' : ''}`}
-          onClick={() => setTab('users')}
-        >
-          USERS
-        </button>
+        {(['defenses', 'users', 'tickets'] as const).map(t => (
+          <button
+            key={t}
+            type="button"
+            className={`bt-tab ${tab === t ? 'active' : ''}`}
+            onClick={() => setTab(t)}
+          >
+            {t.toUpperCase()}
+          </button>
+        ))}
       </nav>
 
-      {tab === 'users' ? (
-        <div className="bt-users-grid">
-          {users.length === 0 && <div className="bt-events-empty">Loading operator accounts…</div>}
-          {users.map(u => (
-            <UserPasswordCard key={u.username} user={u} token={token} onExpired={handleExpired} />
-          ))}
-        </div>
-      ) : (
-      <div className="bt-grid">
-        <div className="bt-column">
-          <section className="bt-panel">
-            <h2>ACCESS CONTROL</h2>
+      {/* ══ DEFENSES ══════════════════════════════════════════ */}
+      {tab === 'defenses' && (
+        <div className="bt-stack">
+          <Section
+            title="ACCESS CONTROL & AUTHENTICATION"
+            subtitle="Brute-force protection and operator session policy"
+            badge={onOff(settings.login_rate_limit)}
+            badgeTone={onOffTone(settings.login_rate_limit)}
+            defaultOpen
+          >
             <div className="bt-control">
               <div className="bt-control-head">
                 <div>
                   <div className="bt-control-title">Login Rate Limiting</div>
-                  <div className="bt-control-desc">Throttle brute-force attempts on the admin login endpoint</div>
+                  <div className="bt-control-desc">Throttle brute-force attempts on the operator login endpoint. Valid operator credentials are never locked out.</div>
                 </div>
                 <Toggle checked={settings.login_rate_limit} onChange={v => set('login_rate_limit', v)} />
               </div>
               <label className="bt-field">
-                <span>MAX LOGIN ATTEMPTS PER MINUTE</span>
+                <span>MAX FAILED ATTEMPTS PER MINUTE</span>
                 <input
                   type="number" min={1}
                   value={settings.rate_limit_per_minute}
@@ -370,34 +475,15 @@ const BlueTeamDashboard: React.FC<BlueTeamDashboardProps> = ({ token, onLogout }
                 />
               </label>
             </div>
-
-            <div className="bt-control">
-              <div className="bt-control-head">
-                <div>
-                  <div className="bt-control-title">IP Blacklist</div>
-                  <div className="bt-control-desc">Block known malicious IPs (manual entries below)</div>
-                </div>
-                <Toggle checked={settings.ip_blacklist_enabled} onChange={v => set('ip_blacklist_enabled', v)} />
-              </div>
-              <div className="bt-field">
-                <span>BLACKLISTED IPS / SUBNETS</span>
-                <IpListEditor
-                  ips={settings.ip_blacklist}
-                  placeholder="e.g. 203.0.113.45"
-                  onChange={ips => set('ip_blacklist', ips)}
-                />
-              </div>
-            </div>
-
             <div className="bt-control">
               <div className="bt-control-head">
                 <div>
                   <div className="bt-control-title">Admin Session Timeout</div>
-                  <div className="bt-control-desc">Auto-expire logged-in admin sessions (below)</div>
+                  <div className="bt-control-desc">Force re-authentication of admin sessions after the configured lifetime.</div>
                 </div>
               </div>
               <label className="bt-field">
-                <span>ADMIN SESSION TIMEOUT (MINUTES)</span>
+                <span>SESSION LIFETIME (MINUTES)</span>
                 <input
                   type="number" min={1}
                   value={settings.admin_session_timeout_minutes}
@@ -405,90 +491,36 @@ const BlueTeamDashboard: React.FC<BlueTeamDashboardProps> = ({ token, onLogout }
                 />
               </label>
             </div>
-          </section>
+          </Section>
 
-        </div>
-
-        <div className="bt-column">
-          <section className="bt-panel">
-            <h2>ICS PROTOCOL DEFENSES</h2>
+          <Section
+            title="NETWORK ACCESS CONTROL"
+            subtitle="Restrict which source IPs may reach the controller API"
+            badge={`${networkEnabled}/2 ENABLED`}
+            badgeTone={networkEnabled > 0 ? 'ok' : 'off'}
+          >
             <div className="bt-control">
               <div className="bt-control-head">
                 <div>
-                  <div className="bt-control-title">Modbus Write Protection</div>
-                  <div className="bt-control-desc">Block unauthorized HALT writes over Modbus TCP</div>
+                  <div className="bt-control-title">IP Blocklist</div>
+                  <div className="bt-control-desc">Deny requests from known-malicious addresses. Accepts exact IPs, prefixes, or CIDR subnets.</div>
                 </div>
-                <Toggle checked={settings.modbus_write_restricted} onChange={v => set('modbus_write_restricted', v)} />
+                <Toggle checked={settings.ip_blacklist_enabled} onChange={v => set('ip_blacklist_enabled', v)} />
               </div>
-            </div>
-          </section>
-
-          <section className="bt-panel">
-            <h2>WEB &amp; ALERTING</h2>
-            <p className="bt-panel-note">NOTIFICATION POPUPS SHOW EFFECTS ONLY FOR SEVERITY &gt;= TIER</p>
-            <label className="bt-field">
-              <span>NOTIFICATION ALERT TIER</span>
-              <select
-                value={settings.alert_notification_tier}
-                onChange={e => set('alert_notification_tier', e.target.value)}
-              >
-                <option value="critical">Critical only</option>
-                <option value="high">High and above</option>
-                <option value="medium">Medium and above</option>
-                <option value="low">All alerts</option>
-              </select>
-            </label>
-          </section>
-        </div>
-
-        <div className="bt-column">
-          <section className="bt-panel">
-            <h2>MITIGATION COMMANDS</h2>
-            <p className="bt-panel-note">Toggle each mitigation and set its parameters. No code required — enabled controls are applied automatically on live traffic.</p>
-
-            <div className="bt-control">
-              <div className="bt-control-head">
-                <div>
-                  <div className="bt-control-title">Telemetry Validation</div>
-                  <div className="bt-control-desc">Reject telemetry outside the physical power bounds below</div>
-                </div>
-                <Toggle checked={settings.telemetry_validation} onChange={v => set('telemetry_validation', v)} />
-              </div>
-              <label className="bt-field">
-                <span>MAX POWER (KW)</span>
-                <input
-                  type="number"
-                  value={settings.telemetry_max_power_kw}
-                  disabled={!settings.telemetry_validation}
-                  onChange={e => set('telemetry_max_power_kw', Number(e.target.value))}
+              <div className="bt-field">
+                <span>BLOCKED IPS / SUBNETS</span>
+                <IpListEditor
+                  ips={settings.ip_blacklist}
+                  placeholder="e.g. 203.0.113.45 or 203.0.113.0/24"
+                  onChange={ips => set('ip_blacklist', ips)}
                 />
-              </label>
-              <label className="bt-field">
-                <span>MIN POWER (KW)</span>
-                <input
-                  type="number"
-                  value={settings.telemetry_min_power_kw}
-                  disabled={!settings.telemetry_validation}
-                  onChange={e => set('telemetry_min_power_kw', Number(e.target.value))}
-                />
-              </label>
-            </div>
-
-            <div className="bt-control">
-              <div className="bt-control-head">
-                <div>
-                  <div className="bt-control-title">XSS / SQLi Filter</div>
-                  <div className="bt-control-desc">Block script, event handlers and SQL injection signatures on web requests</div>
-                </div>
-                <Toggle checked={settings.xss_protection} onChange={v => set('xss_protection', v)} />
               </div>
             </div>
-
             <div className="bt-control">
               <div className="bt-control-head">
                 <div>
-                  <div className="bt-control-title">IP Whitelist</div>
-                  <div className="bt-control-desc">Only allow the IPs listed below to reach the API</div>
+                  <div className="bt-control-title">IP Allowlist</div>
+                  <div className="bt-control-desc">When enabled, only the listed addresses may reach the API (default-deny). The login and defense-console endpoints stay reachable as a lockout-recovery path.</div>
                 </div>
                 <Toggle checked={settings.ip_whitelist_enabled} onChange={v => set('ip_whitelist_enabled', v)} />
               </div>
@@ -501,16 +533,224 @@ const BlueTeamDashboard: React.FC<BlueTeamDashboardProps> = ({ token, onLogout }
                 />
               </div>
             </div>
-          </section>
-        </div>
+          </Section>
 
-        <div className="bt-column bt-column-wide">
-          <section className="bt-panel">
-            <h2>SECURITY EVENT REVIEW</h2>
-            <p className="bt-panel-note">Incidents and suspicious behavior logged by the SOC / admin for your review.</p>
+          <Section
+            title="OT PROTOCOL HARDENING"
+            subtitle="Industrial protocol defenses for the Modbus/TCP interface"
+            badge={onOff(settings.modbus_write_restricted)}
+            badgeTone={onOffTone(settings.modbus_write_restricted)}
+          >
+            <div className="bt-control">
+              <div className="bt-control-head">
+                <div>
+                  <div className="bt-control-title">Modbus Write Protection</div>
+                  <div className="bt-control-desc">Block unauthorized HALT coil writes over Modbus TCP, preventing remote shutdown of the plant.</div>
+                </div>
+                <Toggle checked={settings.modbus_write_restricted} onChange={v => set('modbus_write_restricted', v)} />
+              </div>
+            </div>
+          </Section>
+
+          <Section
+            title="TELEMETRY INTEGRITY"
+            subtitle="Reject spoofed or physically impossible telemetry"
+            badge={onOff(settings.telemetry_validation)}
+            badgeTone={onOffTone(settings.telemetry_validation)}
+          >
+            <div className="bt-control">
+              <div className="bt-control-head">
+                <div>
+                  <div className="bt-control-title">Telemetry Validation</div>
+                  <div className="bt-control-desc">Discard telemetry samples outside the physical power bounds below.</div>
+                </div>
+                <Toggle checked={settings.telemetry_validation} onChange={v => set('telemetry_validation', v)} />
+              </div>
+              <div className="bt-field-row">
+                <label className="bt-field">
+                  <span>MAX POWER (KW)</span>
+                  <input
+                    type="number"
+                    value={settings.telemetry_max_power_kw}
+                    disabled={!settings.telemetry_validation}
+                    onChange={e => set('telemetry_max_power_kw', Number(e.target.value))}
+                  />
+                </label>
+                <label className="bt-field">
+                  <span>MIN POWER (KW)</span>
+                  <input
+                    type="number"
+                    value={settings.telemetry_min_power_kw}
+                    disabled={!settings.telemetry_validation}
+                    onChange={e => set('telemetry_min_power_kw', Number(e.target.value))}
+                  />
+                </label>
+              </div>
+            </div>
+          </Section>
+
+          <Section
+            title="APPLICATION LAYER DEFENSE (WAF)"
+            subtitle="Web request filtering for injection attacks"
+            badge={onOff(settings.xss_protection)}
+            badgeTone={onOffTone(settings.xss_protection)}
+          >
+            <div className="bt-control">
+              <div className="bt-control-head">
+                <div>
+                  <div className="bt-control-title">XSS / SQLi Signature Filter</div>
+                  <div className="bt-control-desc">Block requests carrying script tags, event handlers, or SQL-injection signatures before they reach the application.</div>
+                </div>
+                <Toggle checked={settings.xss_protection} onChange={v => set('xss_protection', v)} />
+              </div>
+            </div>
+          </Section>
+
+          <Section
+            title="ALERTING POLICY"
+            subtitle="Which severities raise operator popup notifications"
+            badge={settings.alert_notification_tier.toUpperCase()}
+            badgeTone="warn"
+          >
+            <label className="bt-field">
+              <span>NOTIFICATION ALERT TIER</span>
+              <select
+                value={settings.alert_notification_tier}
+                onChange={e => set('alert_notification_tier', e.target.value)}
+              >
+                <option value="critical">Critical only</option>
+                <option value="high">High and above</option>
+                <option value="medium">Medium and above</option>
+                <option value="low">All alerts</option>
+              </select>
+            </label>
+          </Section>
+
+          <Section
+            title="INCIDENT RECOVERY"
+            subtitle="Restore plant operation after a security incident"
+            badge={plantStatus}
+            badgeTone={plantStatus === 'RUNNING' ? 'ok' : 'crit'}
+          >
+            <div className="bt-plant">
+              <div>
+                Plant status:{' '}
+                <span className={plantStatus === 'RUNNING' ? 'plant-running' : 'plant-halted'}>{plantStatus}</span>
+              </div>
+              <div className="bt-control-desc">Resetting clears the Modbus HALT coil and resumes telemetry without a container restart. The action is logged for the SOC.</div>
+              <button type="button" className="bt-btn-secondary" onClick={resetPlant}>⟳ RESET PLANT</button>
+            </div>
+          </Section>
+        </div>
+      )}
+
+      {/* ══ USERS ═════════════════════════════════════════════ */}
+      {tab === 'users' && (
+        <div className="bt-stack">
+          <div className="bt-stack-intro">
+            <h2>OPERATOR ACCOUNTS</h2>
+            <p>Manage credentials for the operator accounts on this controller. Password resets take effect on the account's next login.</p>
+          </div>
+          {users.length === 0 && <div className="bt-events-empty">Loading operator accounts…</div>}
+          {users.map(u => (
+            <UserAccount key={u.username} user={u} token={token} onExpired={handleExpired} />
+          ))}
+        </div>
+      )}
+
+      {/* ══ TICKETS ═══════════════════════════════════════════ */}
+      {tab === 'tickets' && (
+        <div className="bt-stack">
+          <Section
+            title="TICKET QUEUE"
+            subtitle="Support tickets submitted by users — triage and update status"
+            badge={`${openTickets} OPEN`}
+            badgeTone={openTickets > 0 ? 'warn' : 'ok'}
+            defaultOpen
+          >
+            <div className="bt-toolbar">
+              <input
+                className="bt-search"
+                placeholder="Search subject, description, reporter, IP…"
+                value={ticketQuery}
+                onChange={e => setTicketQuery(e.target.value)}
+              />
+              <select value={ticketStatus} onChange={e => setTicketStatus(e.target.value)}>
+                <option value="all">All statuses</option>
+                <option value="open">Open</option>
+                <option value="investigating">Investigating</option>
+                <option value="resolved">Resolved</option>
+                <option value="closed">Closed</option>
+              </select>
+            </div>
+            <div className="bt-tickets-list">
+              {!ticketsLoaded && <div className="bt-events-empty">Loading tickets…</div>}
+              {ticketsLoaded && filteredTickets.length === 0 && (
+                <div className="bt-events-empty">No tickets match the current search / filter.</div>
+              )}
+              {filteredTickets.map(t => (
+                <div key={t.id} className={`bt-ticket status-${t.status}`}>
+                  <div className="bt-ticket-top">
+                    <span className="bt-ticket-id">#{t.id}</span>
+                    <span className="bt-ticket-subject">{t.subject}</span>
+                    <span className={`bt-ticket-status st-${t.status}`}>{t.status.toUpperCase()}</span>
+                  </div>
+                  <div className="bt-ticket-desc">{t.description}</div>
+                  <div className="bt-event-meta">
+                    From {t.reporter}
+                    {t.ip ? ` · IP ${t.ip}` : ''}
+                    {t.category ? ` · ${t.category}` : ''}
+                    {' · '}{new Date(t.created).toLocaleString()}
+                  </div>
+                  <div className="bt-ticket-actions">
+                    {TICKET_STATUS_FLOW.filter(s => s !== t.status).map(s => (
+                      <button
+                        key={s}
+                        type="button"
+                        className="bt-ticket-action"
+                        onClick={() => setTicketStatusApi(t.id, s)}
+                      >
+                        {s === 'open' ? 'REOPEN' : s.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Section>
+
+          <Section
+            title="SECURITY EVENT REVIEW"
+            subtitle="Incidents and suspicious behavior logged by the SOC"
+            badge={`${events.length} EVENTS`}
+            badgeTone={events.some(ev => ['critical', 'high'].includes((ev.severity || '').toLowerCase())) ? 'crit' : 'off'}
+            defaultOpen
+          >
+            <div className="bt-toolbar">
+              <input
+                className="bt-search"
+                placeholder="Search message, details, source, IP…"
+                value={eventQuery}
+                onChange={e => setEventQuery(e.target.value)}
+              />
+              <select value={eventSeverity} onChange={e => setEventSeverity(e.target.value)}>
+                <option value="all">All severities</option>
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+              <select value={eventCategory} onChange={e => setEventCategory(e.target.value)}>
+                <option value="all">All categories</option>
+                {eventCategories.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="bt-result-count">
+              Showing {filteredEvents.length} of {events.length} events
+            </div>
             <div className="bt-events">
-              {events.length === 0 && <div className="bt-events-empty">No security events recorded.</div>}
-              {events.map((ev, i) => (
+              {filteredEvents.length === 0 && <div className="bt-events-empty">No events match the current search / filter.</div>}
+              {filteredEvents.map((ev, i) => (
                 <div key={`${ev.timestamp}-${i}`} className={`bt-event ${severityClass(ev.severity)}`}>
                   <div className="bt-event-top">
                     <span className={`bt-sev-badge ${severityClass(ev.severity)}`}>{(ev.severity || '').toUpperCase()}</span>
@@ -524,24 +764,8 @@ const BlueTeamDashboard: React.FC<BlueTeamDashboardProps> = ({ token, onLogout }
                 </div>
               ))}
             </div>
-          </section>
+          </Section>
         </div>
-
-        <div className="bt-column">
-          <section className="bt-panel">
-            <h2>PLANT RECOVERY</h2>
-            <p className="bt-panel-note">Restore a halted plant to RUNNING after an incident without waiting for a container restart.</p>
-            <div className="bt-plant">
-              <div>
-                Plant status:{' '}
-                <span className={plantStatus === 'RUNNING' ? 'plant-running' : 'plant-halted'}>{plantStatus}</span>
-              </div>
-              <div className="bt-control-desc">Resetting clears the Modbus HALT coil and resumes telemetry. The action is logged for the SOC.</div>
-              <button type="button" className="bt-btn-secondary" onClick={resetPlant}>⟳ RESET PLANT</button>
-            </div>
-          </section>
-        </div>
-      </div>
       )}
 
       <footer className="bt-footer">

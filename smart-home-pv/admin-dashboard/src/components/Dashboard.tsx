@@ -6,7 +6,6 @@ import AreaMap from './AreaMap';
 import PowerChart from './PowerChart';
 import ModbusControl from './ModbusControl';
 import SecurityAlerts from './SecurityAlerts';
-import Tickets from './Tickets';
 import NotificationPopup from './NotificationPopup';
 import './Dashboard.css';
 import { logAdminActivity, useAdminActivityCapture } from '../utils/activityLogger';
@@ -401,14 +400,6 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
               <span className="nav-label">Security Ops</span>
               <span className="nav-led nav-led-amb" />
             </button>
-            <button
-              className={`nav-item ${activeView === 'tickets' ? 'active' : ''}`}
-              onClick={() => handleViewChange('tickets')}
-            >
-              <span className="nav-index">06</span>
-              <span className="nav-label">Tickets</span>
-              <span className="nav-led nav-led-ok" />
-            </button>
           </nav>
 
           <div className="sidebar-footer">
@@ -443,13 +434,10 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
               <PowerChart telemetryData={telemetryData} />
             )}
             {activeView === 'modbus' && (
-              <ModbusControl token={token} />
+              <ModbusControl token={token} siteData={siteData} />
             )}
             {activeView === 'security' && (
               <SecurityAlerts token={token} telemetryData={telemetryData} systemStatus={systemStatus} />
-            )}
-            {activeView === 'tickets' && (
-              <Tickets token={token} />
             )}
           </div>
         </main>

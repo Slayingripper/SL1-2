@@ -2,20 +2,22 @@
    PV SCADA HMI — Industrial control-room design system
    ============================================================ */
 :root {
-  --bg: #101418;
-  --bg-deep: #0a0d10;
-  --panel: #181e24;
-  --panel-2: #12171c;
-  --border: #2a333c;
-  --border-strong: #39434d;
-  --text: #d7dee6;
-  --muted: #7c8794;
-  --accent: #ffb000;          /* industrial amber */
-  --accent-dim: rgba(255, 176, 0, 0.12);
-  --ok: #3fb950;
-  --warn: #ffb000;
-  --crit: #ff4545;
-  --info: #4aa3ff;
+  /* Medium-slate control-room theme (shared with the blue-team console),
+     tinted slightly green to distinguish the operator dashboard. */
+  --bg: #232c27;
+  --bg-deep: #1b221d;
+  --panel: #2c372f;
+  --panel-2: #26302a;
+  --border: #46534b;
+  --border-strong: #5a6960;
+  --text: #eef4ef;            /* high-contrast text */
+  --muted: #a6b3aa;
+  --accent: #4fca92;          /* vibrant green */
+  --accent-dim: rgba(79, 202, 146, 0.16);
+  --ok: #4fca92;
+  --warn: #f0b64a;            /* vibrant amber */
+  --crit: #f16b62;            /* vibrant red */
+  --info: #5cb0ee;            /* vibrant blue */
   --mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, 'Courier New', monospace;
 }
 
@@ -41,9 +43,7 @@ code {
 
 .App {
   min-height: 100vh;
-  background:
-    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.008) 0 1px, transparent 1px 3px),
-    var(--bg);
+  background: var(--bg);
 }
 
 /* Scrollbar styling */
@@ -67,6 +67,6 @@ code {
 
 /* Selection styling */
 ::selection {
-  background: rgba(255, 176, 0, 0.3);
+  background: rgba(79, 202, 146, 0.4);
   color: #fff;
 }
