@@ -428,7 +428,7 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
               />
             )}
             {activeView === 'areamap' && (
-              <AreaMap siteData={siteData} token={token} mqttConnected={mqttConnected} />
+              <AreaMap siteData={siteData} token={token} mqttConnected={mqttConnected} systemStatus={systemStatus} />
             )}
             {activeView === 'power' && (
               <PowerChart telemetryData={telemetryData} />

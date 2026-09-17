@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { MAP_SITES, SiteMeta } from '../data/mapSites';
 import { SiteLive, SiteTelemetry } from './Dashboard';
 import { logAdminActivity } from '../utils/activityLogger';
@@ -8,7 +8,11 @@ interface AreaMapProps {
   siteData: Record<string, SiteLive>;
   token: string;
   mqttConnected: boolean;
+  systemStatus?: { status?: string } | null;
 }
+
+/** The map site that represents the physical plant behind the Modbus controller. */
+const CONTROLLER_SITE_ID = 'pv-plant';
 
 const STALE_AFTER_S = 30;
 
@@ -231,17 +235,19 @@ interface GlyphProps {
   meta: SiteMeta;
   live?: SiteLive;
   selected: boolean;
+  halted?: boolean;
   onSelect: (id: string) => void;
 }
 
-const SiteGlyph: React.FC<GlyphProps> = ({ meta, live, selected, onSelect }) => {
+const SiteGlyph: React.FC<GlyphProps> = ({ meta, live, selected, halted, onSelect }) => {
   const latest = live?.latest;
   const stale = isStale(latest);
   const kw = magnitudeKw(latest);
   const consumer = meta.type === 'army';
-  const producing = !stale && !consumer && kw > 0.05;
+  const producing = !halted && !stale && !consumer && kw > 0.05;
   const labelY = meta.type === 'house' ? -84 : -106;
-  const badgeText = stale ? '—' : consumer ? `▼ ${fmtKw(kw)}` : fmtKw(kw);
+  const badgeText = halted ? '⛔ HALTED' : stale ? '—' : consumer ? `▼ ${fmtKw(kw)}` : fmtKw(kw);
+  const led = halted ? 'led-crit' : ledClass(latest);
   const variant = meta.type === 'house' ? Math.max(0, (parseInt(meta.id.split('-')[1] || '1', 10) - 1) % 3) : 0;
 
   const handleActivate = () => onSelect(meta.id);
@@ -263,7 +269,7 @@ const SiteGlyph: React.FC<GlyphProps> = ({ meta, live, selected, onSelect }) => 
       <g className="kw-badge">
         <rect x={-52} y={labelY + 6} width={104} height={20} rx={4} />
         <text x={4} y={labelY + 20} textAnchor="middle">{badgeText}</text>
-        <circle className={`status-led ${ledClass(latest)}`} cx={-40} cy={labelY + 16} r={4} />
+        <circle className={`status-led ${led}`} cx={-40} cy={labelY + 16} r={4} />
       </g>
       {selected && (
         <rect className="selection-ring"
@@ -284,15 +290,17 @@ const SiteDetailPanel: React.FC<{
   meta: SiteMeta;
   live?: SiteLive;
   plantLive?: SiteLive;
-}> = ({ meta, live, plantLive }) => {
+  halted?: boolean;
+}> = ({ meta, live, plantLive, halted }) => {
   const latest = live?.latest ?? null;
   const history = live?.history ?? [];
   const stale = isStale(latest);
   const consumer = meta.type === 'army';
   const kw = magnitudeKw(latest);
   const ageS = latest?.ts ? Math.max(0, Math.round(Date.now() / 1000 - latest.ts)) : null;
-  const statusText = !latest ? 'NO DATA' : stale ? 'STALE' : (latest.status || 'ok').toUpperCase();
-  const statusClass = !latest || stale ? 'pill-stale'
+  const statusText = halted ? 'HALTED' : !latest ? 'NO DATA' : stale ? 'STALE' : (latest.status || 'ok').toUpperCase();
+  const statusClass = halted ? 'pill-crit'
+    : !latest || stale ? 'pill-stale'
     : latest.status === 'fault' ? 'pill-crit'
     : latest.status === 'idle' ? 'pill-idle' : 'pill-ok';
   const sparkColor = consumer ? '#4aa3ff' : '#ffb000';
@@ -396,9 +404,38 @@ const SiteDetailPanel: React.FC<{
 /* ------------------------------------------------------------------ */
 /* Main component                                                      */
 /* ------------------------------------------------------------------ */
-const AreaMap: React.FC<AreaMapProps> = ({ siteData, token, mqttConnected }) => {
+const AreaMap: React.FC<AreaMapProps> = ({ siteData, token, mqttConnected, systemStatus }) => {
   const [selectedId, setSelectedId] = useState('pv-plant');
   const selectedMeta = MAP_SITES.find(s => s.id === selectedId) || MAP_SITES[0];
+
+  // Per-asset HALT state from the Modbus units (one unit per asset). Each asset
+  // can be halted independently, so the map reflects exactly which ones are down.
+  const [assetHalt, setAssetHalt] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const resp = await fetch('/api/assets/status');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const map: Record<string, boolean> = {};
+        Object.entries(data.assets || {}).forEach(([id, v]: [string, any]) => {
+          map[id] = !!v.halted;
+        });
+        if (!cancelled) setAssetHalt(map);
+      } catch {
+        /* non-fatal */
+      }
+    };
+    void load();
+    const iv = setInterval(load, 4000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, []);
+
+  // Fallback: the controller's own status feed also marks the pv-plant halted.
+  const controllerHalted = String(systemStatus?.status || '').toUpperCase() === 'HALTED';
+  const isHalted = (id: string) =>
+    !!assetHalt[id] || (id === CONTROLLER_SITE_ID && controllerHalted);
 
   const handleSelect = (id: string) => {
     setSelectedId(id);
@@ -567,6 +604,7 @@ const AreaMap: React.FC<AreaMapProps> = ({ siteData, token, mqttConnected }) => 
                            meta={meta}
                            live={siteData[meta.id]}
                            selected={selectedId === meta.id}
+                           halted={isHalted(meta.id)}
                            onSelect={handleSelect} />
               ))}
             </g>
@@ -584,7 +622,8 @@ const AreaMap: React.FC<AreaMapProps> = ({ siteData, token, mqttConnected }) => 
 
         <SiteDetailPanel meta={selectedMeta}
                          live={siteData[selectedId]}
-                         plantLive={siteData['pv-plant']} />
+                         plantLive={siteData['pv-plant']}
+                         halted={isHalted(selectedId)} />
       </div>
     </div>
   );

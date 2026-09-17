@@ -190,12 +190,22 @@ class ChallengeState:
         self.blocked_ips_file = '/opt/pv-controller/logs/blocked_ips.json'
         self.anomalous_data_file = '/opt/pv-controller/logs/anomalous_data.json'
         self.tickets_file = '/opt/pv-controller/logs/tickets.json'
-        # Load persisted security events (if any)
+        # SQLite is the durable store for security events + tickets (queryable,
+        # survives restarts). Other diagnostic state stays as JSON snapshots.
+        self.db_path = '/opt/pv-controller/logs/cyber_range.db'
+        self._db = None
         try:
-            self._load_security_events()
+            self._init_db()   # creates tables, one-time JSON migration, loads into memory
         except Exception:
-            # Ignore load errors - we'll create the file on first save
-            pass
+            logger.exception('Failed to initialize SQLite store; falling back to JSON')
+            try:
+                self._load_security_events()
+            except Exception:
+                pass
+            try:
+                self._load_tickets()
+            except Exception:
+                pass
         # Load additional diagnostic state files (non-fatal if missing)
         try:
             self._load_failed_logins()
@@ -209,10 +219,88 @@ class ChallengeState:
             self._load_anomalous_data()
         except Exception:
             pass
-        try:
-            self._load_tickets()
-        except Exception:
-            pass
+
+    # ── SQLite store (security events + tickets) ─────────────────────────
+    def _init_db(self):
+        import sqlite3
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self._db = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._db.row_factory = sqlite3.Row
+        self._db.executescript('''
+            CREATE TABLE IF NOT EXISTS security_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT, severity TEXT, category TEXT, message TEXT,
+                details TEXT, source TEXT, ip TEXT, suspicious INTEGER);
+            CREATE INDEX IF NOT EXISTS idx_events_sev ON security_events(severity);
+            CREATE TABLE IF NOT EXISTS tickets (
+                id INTEGER PRIMARY KEY, created TEXT, subject TEXT, description TEXT,
+                reporter TEXT, source TEXT, severity TEXT, category TEXT, ip TEXT,
+                status TEXT, count INTEGER, last_seen TEXT);
+        ''')
+        self._db.commit()
+        # One-time migration from the old JSON snapshots.
+        if self._db.execute('SELECT COUNT(*) c FROM security_events').fetchone()['c'] == 0 \
+                and os.path.exists(self.security_events_file):
+            try:
+                with open(self.security_events_file) as f:
+                    for e in (json.load(f) or [])[-100:]:
+                        self._db_insert_event(e, commit=False)
+                self._db.commit()
+                logger.info('Migrated security events from JSON into SQLite')
+            except Exception:
+                logger.exception('Security-event JSON migration failed')
+        if self._db.execute('SELECT COUNT(*) c FROM tickets').fetchone()['c'] == 0 \
+                and os.path.exists(self.tickets_file):
+            try:
+                with open(self.tickets_file) as f:
+                    for t in (json.load(f) or {}).get('tickets', []):
+                        self._db_upsert_ticket(t, commit=False)
+                self._db.commit()
+                logger.info('Migrated tickets from JSON into SQLite')
+            except Exception:
+                logger.exception('Ticket JSON migration failed')
+        self._db_load_events()
+        self._db_load_tickets()
+
+    def _db_insert_event(self, event, commit=True):
+        self._db.execute(
+            'INSERT INTO security_events (timestamp,severity,category,message,details,source,ip,suspicious)'
+            ' VALUES (?,?,?,?,?,?,?,?)',
+            (event.get('timestamp'), event.get('severity'), event.get('category'),
+             event.get('message'), event.get('details'), event.get('source'),
+             event.get('ip'), 1 if event.get('suspicious') else 0))
+        if commit:
+            self._db.commit()
+
+    def _db_upsert_ticket(self, t, commit=True):
+        self._db.execute(
+            'INSERT OR REPLACE INTO tickets'
+            ' (id,created,subject,description,reporter,source,severity,category,ip,status,count,last_seen)'
+            ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+            (t.get('id'), t.get('created'), t.get('subject'), t.get('description'),
+             t.get('reporter'), t.get('source'), t.get('severity'), t.get('category'),
+             t.get('ip'), t.get('status'), t.get('count', 1), t.get('last_seen')))
+        if commit:
+            self._db.commit()
+
+    def _db_load_events(self):
+        rows = self._db.execute(
+            'SELECT timestamp,severity,category,message,details,source,ip,suspicious'
+            ' FROM security_events ORDER BY id DESC LIMIT 100').fetchall()
+        events = [{
+            'timestamp': r['timestamp'], 'severity': r['severity'], 'category': r['category'],
+            'message': r['message'], 'details': r['details'], 'source': r['source'],
+            'ip': r['ip'], 'suspicious': bool(r['suspicious']),
+        } for r in rows]
+        events.reverse()  # store chronologically, as the rest of the code expects
+        self.security_events = events
+
+    def _db_load_tickets(self):
+        rows = self._db.execute(
+            'SELECT id,created,subject,description,reporter,source,severity,category,ip,status,count,last_seen'
+            ' FROM tickets ORDER BY id ASC').fetchall()
+        self.tickets = [dict(r) for r in rows]
+        self.ticket_seq = max([t['id'] for t in self.tickets], default=0)
 
     def add_ticket(self, subject, description, reporter, source='user',
                    severity=None, category=None, ip=None):
@@ -227,7 +315,7 @@ class ChallengeState:
                             and t['status'] in ('open', 'investigating')):
                         t['count'] = t.get('count', 1) + 1
                         t['last_seen'] = datetime.now().isoformat()
-                        self._save_tickets_safe()
+                        self._persist_ticket(t)
                         return t
             self.ticket_seq += 1
             ticket = {
@@ -247,7 +335,7 @@ class ChallengeState:
             self.tickets.append(ticket)
             if len(self.tickets) > 200:
                 self.tickets = self.tickets[-200:]
-            self._save_tickets_safe()
+            self._persist_ticket(ticket)
             return ticket
 
     def update_ticket_status(self, ticket_id, status):
@@ -255,9 +343,19 @@ class ChallengeState:
             for t in self.tickets:
                 if t['id'] == ticket_id:
                     t['status'] = status
-                    self._save_tickets_safe()
+                    self._persist_ticket(t)
                     return t
             return None
+
+    def _persist_ticket(self, ticket):
+        """Write a single ticket row to SQLite (falls back to JSON snapshot)."""
+        if self._db is not None:
+            try:
+                self._db_upsert_ticket(ticket)
+                return
+            except Exception:
+                logger.exception('SQLite ticket write failed; falling back to JSON')
+        self._save_tickets_safe()
 
     def _save_tickets_safe(self):
         try:
@@ -366,11 +464,14 @@ class ChallengeState:
                 logger.warning(f"Security Event [{severity}] {category}: {message} - {details} (source: {source})")
             except Exception:
                 pass
-            # Persist security events to disk so they survive page refreshes
+            # Persist the event so it survives restarts (SQLite, JSON fallback).
             try:
-                self._save_security_events()
+                if self._db is not None:
+                    self._db_insert_event(event)
+                else:
+                    self._save_security_events()
             except Exception:
-                logger.exception("Failed to persist security events")
+                logger.exception("Failed to persist security event")
     
     def add_failed_login(self, username, ip_address):
         """Track failed login attempts"""
@@ -655,6 +756,25 @@ pv_status = {
     "current_a": 13.3,
     "last_update": time.time()
 }
+
+# ── Per-asset Modbus units ───────────────────────────────────────────────
+# The Modbus/TCP server exposes one addressable unit (slave id) per field asset,
+# like a real SCADA gateway fronting several downstream controllers. Unit 1 is
+# the main PV plant (also the Plant Overview "controller" / the pv-plant map
+# asset); the rest map to the Area Map sites so each can be halted independently.
+MODBUS_ASSETS = [
+    {'unit': 1, 'asset_id': 'pv-plant',  'name': 'Limassol Ridge PV Plant', 'consumer': False},
+    {'unit': 2, 'asset_id': 'house-1',   'name': 'Ktima Elia 4',            'consumer': False},
+    {'unit': 3, 'asset_id': 'house-2',   'name': 'Ktima Elia 6',            'consumer': False},
+    {'unit': 4, 'asset_id': 'house-3',   'name': 'Ktima Elia 8',            'consumer': False},
+    {'unit': 5, 'asset_id': 'army-base', 'name': 'Camp Evagoras',           'consumer': True},
+]
+UNIT_BY_ASSET = {a['asset_id']: a['unit'] for a in MODBUS_ASSETS}
+ASSET_BY_UNIT = {a['unit']: a for a in MODBUS_ASSETS}
+
+# Per-asset HALT flags. The pv-plant flag is mirrored into pv_status so the
+# existing controller views / telemetry sim keep working unchanged.
+asset_halt = {a['asset_id']: False for a in MODBUS_ASSETS}
 
 SERVER_STARTED_AT = time.time()
 
@@ -1324,70 +1444,74 @@ else:
 modbus_context = None
 last_modbus_alert_time = None
 
+def _halt_asset(asset_id, source='Modbus Monitor'):
+    """Apply a HALT to one asset (called when its HALT coil goes TRUE)."""
+    global last_modbus_alert_time
+    meta = ASSET_BY_UNIT.get(UNIT_BY_ASSET.get(asset_id, 0), {})
+    name = meta.get('name', asset_id)
+    asset_halt[asset_id] = True
+    if asset_id == 'pv-plant':
+        pv_status['status'] = 'HALTED'
+        pv_status['power_kw'] = 0
+    logger.critical(f"🛑 {name} HALTED VIA MODBUS (unit {UNIT_BY_ASSET.get(asset_id)}, coil 1 = TRUE)")
+    now = datetime.now()
+    if last_modbus_alert_time is None or (now - last_modbus_alert_time).total_seconds() > 5:
+        state.add_security_event(
+            'critical', 'ICS Protocol',
+            f'Unauthorized Modbus HALT on {name}',
+            f'Coil 1 on unit {UNIT_BY_ASSET.get(asset_id)} ({asset_id}) was set TRUE — direct ICS protocol exploitation.',
+            source,
+        )
+        last_modbus_alert_time = now
+    try:
+        with open('/opt/pv-controller/logs/modbus_attacks.log', 'a') as f:
+            f.write(f"{now.isoformat()},MODBUS_HALT,{FLAGS['modbus_attack']},{asset_id},coil_1\n")
+    except Exception as e:
+        logger.error(f"Failed to write modbus log: {e}")
+
+
 def modbus_monitor_thread():
-    """Monitor Modbus coils for changes"""
-    global modbus_context, last_modbus_alert_time
-    last_coil1_value = False
-    
+    """Watch each unit's HALT coil (coil 1) and halt that asset on a rising edge."""
+    global modbus_context
+    last = {a['unit']: False for a in MODBUS_ASSETS}
+
     while True:
         try:
             if modbus_context is not None:
-                # Read coil 1 value
-                values = modbus_context[0].getValues(1, 1, 1)  # fc=1 (coils), address=1, count=1
-                coil1_value = bool(values[0]) if values else False
-                
-                # Detect change from False to True
-                if coil1_value and not last_coil1_value:
-                    # Blue-team protection: if write protection armed, refuse to halt
-                    if (blueteam_defense['active']
-                            and blueteam_defense['settings'].get('modbus_write_restricted')):
-                        logger.info("🔒 Blue-team Modbus protection prevented HALT via monitor")
-                        state.add_security_event(
-                            'high', 'ICS Protocol',
-                            'Modbus HALT attempt BLOCKED by protection',
-                            'Coil 1 write rejected by defense control',
-                            'Blue Team Defense'
-                        )
-                    else:
-                        logger.critical("🛑 PV SYSTEM HALTED VIA MODBUS (Coil 1 set to TRUE)")
-                        pv_status['status'] = 'HALTED'
-                        pv_status['power_kw'] = 0
-                        
-                        # Only alert if this is a new attack (within last 5 seconds)
-                        # Prevents duplicate alerts on container restart
-                        now = datetime.now()
-                        if last_modbus_alert_time is None or (now - last_modbus_alert_time).total_seconds() > 5:
-                            state.add_security_event(
-                                'critical',
-                                'ICS Protocol',
-                                'Unauthorized Modbus write operation detected',
-                                'Coil 1 was set to TRUE, triggering system HALT. This indicates direct ICS protocol exploitation.',
-                                'Modbus Monitor'
-                            )
-                            last_modbus_alert_time = now
-                        
-                        # Write flag to log file
-                        try:
-                            with open('/opt/pv-controller/logs/modbus_attacks.log', 'a') as f:
-                                f.write(f"{datetime.now().isoformat()},MODBUS_HALT,{FLAGS['modbus_attack']},coil_1\n")
-                        except Exception as e:
-                            logger.error(f"Failed to write modbus log: {e}")
-                
-                last_coil1_value = coil1_value
+                for a in MODBUS_ASSETS:
+                    unit = a['unit']
+                    try:
+                        values = modbus_context[unit].getValues(1, 1, 1)  # fc=1 coils, addr 1
+                    except Exception:
+                        continue
+                    coil1 = bool(values[0]) if values else False
+                    prev = last.get(unit, False)
+                    if coil1 and not prev:
+                        # If write protection is armed the datastore already dropped
+                        # the write, so a rising edge here means it was allowed.
+                        _halt_asset(a['asset_id'])
+                    elif prev and not coil1 and asset_halt.get(a['asset_id']):
+                        # HALT coil cleared → the asset recovers (symmetric control).
+                        asset_halt[a['asset_id']] = False
+                        if a['asset_id'] == 'pv-plant':
+                            pv_status['status'] = 'RUNNING'
+                        logger.info(f"▶️ {a['name']} HALT coil cleared — asset resumed")
+                    last[unit] = coil1
         except Exception as e:
             logger.error(f"Modbus monitor error: {e}")
-        
         time.sleep(1)
 
-class GuardedCoilBlock(ModbusSequentialDataBlock):
-    """Coil store that physically drops the HALT write when blue-team Modbus
-    write protection is armed.
 
-    pymodbus has no write callback hook, so writes are intercepted by wrapping
-    the coil datablock. When the control is active, a write that sets coil 1
-    TRUE is refused before it ever reaches the plant; the traffic is still
-    flagged as a security event so the blue team can attribute the attempt.
+class GuardedCoilBlock(ModbusSequentialDataBlock):
+    """Per-unit coil store that drops the HALT write when blue-team Modbus write
+    protection is armed. pymodbus has no write hook, so we intercept setValues.
+    The attempt is still logged so the blue team can attribute it to the asset.
     """
+
+    def __init__(self, *args, unit=None, asset_id=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._unit = unit
+        self._asset_id = asset_id
 
     def setValues(self, address, values):
         # pymodbus offsets device addresses by +1 into the datastore, so the
@@ -1402,75 +1526,81 @@ class GuardedCoilBlock(ModbusSequentialDataBlock):
         if (2 in touched and any_true
                 and blueteam_defense['active']
                 and blueteam_defense['settings'].get('modbus_write_restricted')):
-            logger.info("🔒 Blue-team Modbus write protection blocked HALT write")
+            meta = ASSET_BY_UNIT.get(self._unit, {})
+            name = meta.get('name', self._asset_id or 'asset')
+            logger.info(f"🔒 Blue-team Modbus write protection blocked HALT write on {name}")
             state.add_security_event(
                 'high', 'ICS Protocol',
-                'Modbus HALT write BLOCKED by protection',
-                f'Write to coil 1 (TRUE) rejected at datastore — defense control active',
+                f'Modbus HALT write BLOCKED by protection ({name})',
+                f'Write to coil 1 (TRUE) on unit {self._unit} rejected at datastore — defense control active',
                 'Blue Team Defense'
             )
-            return  # do NOT land the write, do NOT halt the plant
+            return  # do NOT land the write, do NOT halt the asset
         return super().setValues(address, values)
 
 
-def reset_pv_plant(actor='operator', via='HMI'):
-    """Restore a halted PV plant to RUNNING after an incident.
-
-    Clears the Modbus HALT coil and resets the plant status so telemetry
-    resumes. Records the action as a security event + HMI notification so the
-    recovery is visible to both teams.
-    """
+def reset_asset(asset_id, actor='operator', via='HMI'):
+    """Restore one halted asset: clear its HALT coil and status flag."""
     global modbus_context
-    pv_status['status'] = 'RUNNING'
-    pv_status['power_kw'] = 0.0  # repopulated by the telemetry thread momentarily
-
-    # Clear coil 1 so the monitor doesn't re-trigger the halt on the next poll
-    # and the plant state matches a fresh boot.
+    unit = UNIT_BY_ASSET.get(asset_id)
+    if unit is None:
+        return False
+    asset_halt[asset_id] = False
+    if asset_id == 'pv-plant':
+        pv_status['status'] = 'RUNNING'
+        pv_status['power_kw'] = 0.0  # repopulated by the telemetry thread momentarily
     try:
         if modbus_context is not None:
-            modbus_context[0].setValues(1, 1, [False])
+            modbus_context[unit].setValues(1, 1, [False])
     except Exception:
-        logger.exception('Failed to clear Modbus coil 1 during plant reset')
-
+        logger.exception(f'Failed to clear Modbus coil 1 for {asset_id} during reset')
+    name = ASSET_BY_UNIT.get(unit, {}).get('name', asset_id)
     state.add_security_event(
         'low', 'System Control',
-        f'PV plant reset to RUNNING ({via})',
-        f'Plant restored after halt by {actor}',
+        f'{name} reset to RUNNING ({via})',
+        f'Asset restored after halt by {actor}',
         'Plant Controller'
     )
     try:
-        write_action_log('plant_reset', actor=actor, details={'status': 'RUNNING', 'via': via})
+        write_action_log('asset_reset', actor=actor,
+                         details={'asset': asset_id, 'status': 'RUNNING', 'via': via})
     except Exception:
-        logger.exception('Failed to write plant_reset action log')
-    logger.info(f"♻️ PV plant reset to RUNNING by {actor} via {via}")
+        logger.exception('Failed to write asset_reset action log')
+    logger.info(f"♻️ {name} reset to RUNNING by {actor} via {via}")
+    return True
+
+
+def reset_pv_plant(actor='operator', via='HMI'):
+    """Back-compat wrapper: reset the main PV plant (unit 1 / pv-plant)."""
+    return reset_asset('pv-plant', actor=actor, via=via)
+
 
 def modbus_server_thread():
-    """Run Modbus TCP server"""
+    """Run the Modbus TCP server with one addressable unit per field asset."""
     global modbus_context
-    
+
     if not HAS_PYMODBUS:
         logger.warning("⚠️  pymodbus not available - Modbus server disabled")
         return
-    
+
     try:
-        # Define Modbus registers (pymodbus 3.x API)
-        device = ModbusDeviceContext(
-            di=ModbusSequentialDataBlock(0, [0]*100),  # Discrete Inputs
-            co=GuardedCoilBlock(0, [0]*100),            # Coils (write-protected)
-            hr=ModbusSequentialDataBlock(0, [0]*100),  # Holding Registers
-            ir=ModbusSequentialDataBlock(0, [0]*100),  # Input Registers
-        )
-        
-        context = ModbusServerContext(devices=device, single=True)
+        devices = {}
+        for a in MODBUS_ASSETS:
+            devices[a['unit']] = ModbusDeviceContext(
+                di=ModbusSequentialDataBlock(0, [0] * 100),
+                co=GuardedCoilBlock(0, [0] * 100, unit=a['unit'], asset_id=a['asset_id']),
+                hr=ModbusSequentialDataBlock(0, [0] * 100),
+                ir=ModbusSequentialDataBlock(0, [0] * 100),
+            )
+        context = ModbusServerContext(devices=devices, single=False)
         modbus_context = context  # Store globally for monitoring
-        
+
         MODBUS_PORT = int(os.getenv('MODBUS_PORT', '15002'))
-        logger.info(f"🔧 Starting Modbus TCP server on port {MODBUS_PORT}...")
-        
-        # Start monitoring thread
+        logger.info(f"🔧 Starting Modbus TCP server on port {MODBUS_PORT} "
+                    f"with {len(devices)} units: {sorted(devices.keys())}")
+
         threading.Thread(target=modbus_monitor_thread, daemon=True).start()
-        
-        # Start server (blocking call)
+
         StartTcpServer(
             context=context,
             address=("0.0.0.0", MODBUS_PORT),
@@ -2164,6 +2294,39 @@ def api_status():
     })
 
 
+@app.route("/api/assets/status")
+def api_assets_status():
+    """Per-asset HALT status for the Area Map overlay (one entry per Modbus unit)."""
+    out = {}
+    for a in MODBUS_ASSETS:
+        aid = a['asset_id']
+        if aid == 'pv-plant':
+            halted = pv_status['status'] == 'HALTED'
+        else:
+            halted = bool(asset_halt.get(aid))
+        out[aid] = {
+            'unit': a['unit'],
+            'status': 'HALTED' if halted else 'RUNNING',
+            'halted': halted,
+        }
+    return jsonify({'assets': out})
+
+
+@app.route("/api/asset/reset", methods=['POST'])
+def api_asset_reset():
+    """Restore one halted asset to RUNNING (admin or blue-team operator)."""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '').strip()
+    token_data = validate_token(token)
+    if not token_data:
+        return jsonify({'error': 'Invalid or expired token'}), 401
+    data = request.get_json(silent=True) or {}
+    asset_id = str(data.get('asset_id') or 'pv-plant')
+    if asset_id not in UNIT_BY_ASSET:
+        return jsonify({'error': 'Unknown asset'}), 404
+    ok = reset_asset(asset_id, actor=token_data.get('username', 'operator'), via='HMI')
+    return jsonify({'success': ok, 'asset_id': asset_id})
+
+
 @app.route("/status")
 def status_compat():
     """Legacy status endpoint compatibility."""
@@ -2176,6 +2339,92 @@ def status_compat():
         "uptime_s": int(time.time() - SERVER_STARTED_AT),
         "mqtt_session": MQTT_SESSION_TOKEN,
         "last_update": pv_status['last_update']
+    })
+
+
+def _modbus_hmi_write(client, kind, address, value, unit):
+    """Issue a Modbus write, tolerating pymodbus slave/device_id kwarg changes."""
+    for kw in ({'slave': unit}, {'device_id': unit}, {}):
+        try:
+            if kind == 'coil':
+                return client.write_coil(address, value, **kw)
+            return client.write_register(address, value, **kw)
+        except TypeError:
+            continue
+    # final attempt, let the error surface
+    if kind == 'coil':
+        return client.write_coil(address, value)
+    return client.write_register(address, value)
+
+
+@app.route("/api/modbus/write", methods=['POST'])
+def api_modbus_write():
+    """Operator HMI Modbus write. Performs a real write against the controller's
+    Modbus/TCP server (single datastore), so blue-team write protection and the
+    monitor react exactly as they would to any client on the wire."""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '').strip()
+    token_data = validate_token(token)
+    if not token_data:
+        return jsonify({'error': 'Invalid or expired token'}), 401
+
+    data = request.get_json(silent=True) or {}
+    kind = str(data.get('kind') or '').lower()
+    if kind not in ('coil', 'register'):
+        return jsonify({'error': 'kind must be "coil" or "register"'}), 400
+    try:
+        address = int(data.get('address'))
+        unit = int(data.get('unit', 1))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'address and unit must be integers'}), 400
+    if not (0 <= address <= 65535):
+        return jsonify({'error': 'address out of range (0-65535)'}), 400
+
+    if kind == 'coil':
+        value = bool(data.get('value'))
+    else:
+        try:
+            value = int(data.get('value'))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'register value must be an integer'}), 400
+        if not (0 <= value <= 65535):
+            return jsonify({'error': 'register value out of range (0-65535)'}), 400
+
+    port = int(os.getenv('MODBUS_PORT', '15002'))
+    try:
+        from pymodbus.client import ModbusTcpClient
+        client = ModbusTcpClient('127.0.0.1', port=port, timeout=3)
+        if not client.connect():
+            return jsonify({'error': f'Could not connect to Modbus server on :{port}'}), 502
+        try:
+            rr = _modbus_hmi_write(client, kind, address, value, unit)
+        finally:
+            client.close()
+    except Exception as e:
+        logger.exception('HMI Modbus write failed')
+        return jsonify({'error': f'Modbus write failed: {e}'}), 500
+
+    wrote = not (rr is None or rr.isError())
+    # Let the monitor thread reflect a resulting HALT before we report status.
+    time.sleep(1.2)
+    blocked = bool(kind == 'coil' and address == 1 and value
+                   and blueteam_defense['active']
+                   and blueteam_defense['settings'].get('modbus_write_restricted'))
+    try:
+        write_action_log('modbus_write_via_hmi',
+                         actor=token_data.get('username', 'operator'),
+                         details={'kind': kind, 'address': address,
+                                  'value': str(value), 'unit': unit, 'blocked': blocked})
+    except Exception:
+        pass
+    return jsonify({
+        'status': 'ok',
+        'wrote': wrote,
+        'blocked_by_defense': blocked,
+        'plant_status': pv_status['status'],
+        'kind': kind,
+        'address': address,
+        'unit': unit,
+        'value': value,
     })
 
 
@@ -2781,7 +3030,12 @@ def clear_security_events():
     logger.info(f"🧹 Security events cleared by {token_data.get('username', 'admin')}: {count} events removed")
     # Persist cleared state
     try:
-        state._save_security_events()
+        with state.lock:
+            if state._db is not None:
+                state._db.execute('DELETE FROM security_events')
+                state._db.commit()
+            else:
+                state._save_security_events()
     except Exception:
         logger.exception('Failed to persist security events after clear')
     try:
