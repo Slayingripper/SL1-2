@@ -1,35 +1,37 @@
 /* Blue-team console — light, muted "control-room" theme */
 .bt-console {
-  --bt-bg: #29313c;             /* medium slate */
-  --bt-surface: #323b47;
-  --bt-surface-2: #2d3641;
-  --bt-surface-3: #384250;
-  --bt-border: #434e5d;
-  --bt-border-strong: #515e6f;
-  --bt-text: #cfd6df;
-  --bt-text-strong: #eef2f6;
-  --bt-text-dim: #8d99a8;
+  --bt-bg: #222a34;             /* medium slate, deepened for contrast */
+  --bt-surface: #2c3542;
+  --bt-surface-2: #262f3a;
+  --bt-surface-3: #333d4b;
+  --bt-border: #465364;
+  --bt-border-strong: #5a6879;
+  --bt-text: #eef2f7;           /* high-contrast text */
+  --bt-text-strong: #f7fafd;
+  --bt-text-dim: #a4b0c0;
 
-  --bt-accent: #6f9dc9;         /* muted steel blue */
-  --bt-accent-soft: #33455a;
-  --bt-accent-border: #46596f;
+  --bt-accent: #5ab0f0;         /* vibrant steel blue */
+  --bt-accent-soft: #2b3f57;
+  --bt-accent-border: #3d5a78;
 
-  --bt-amber: #cba869;          /* muted ochre */
-  --bt-amber-soft: #423a29;
-  --bt-amber-border: #5a4e33;
+  --bt-amber: #f0b64a;          /* vibrant amber */
+  --bt-amber-soft: #3f3626;
+  --bt-amber-border: #5c4e30;
 
-  --bt-green: #6fab85;          /* muted sage */
-  --bt-green-soft: #2c3d34;
-  --bt-green-border: #405849;
+  --bt-green: #4fca92;          /* vibrant green */
+  --bt-green-soft: #26382f;
+  --bt-green-border: #3a5546;
 
-  --bt-red: #cd7d76;            /* muted brick */
-  --bt-red-soft: #43302e;
-  --bt-red-border: #5d413e;
+  --bt-red: #f16b62;            /* vibrant red */
+  --bt-red-soft: #3f2c2a;
+  --bt-red-border: #5c3f3b;
 
   min-height: 100vh;
   background: var(--bt-bg);
   color: var(--bt-text);
-  font-family: 'Segoe UI', 'Roboto Mono', monospace, sans-serif;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   display: flex;
   flex-direction: column;
 }
@@ -609,7 +611,7 @@
   padding: 2px 6px;
   border-radius: 2px;
   flex-shrink: 0;
-  color: #ffffff;
+  color: #16202b;
 }
 
 .bt-sev-badge.sev-critical { background: var(--bt-red); }
@@ -768,7 +770,7 @@
 }
 
 .bt-btn-secondary:hover {
-  background: #3d5169;
+  background: #34506e;
 }
 
 .bt-btn-secondary:disabled {
@@ -830,7 +832,7 @@
 
 .bt-apply {
   background: var(--bt-accent);
-  color: #ffffff;
+  color: #16202b;
   border: none;
   padding: 11px 22px;
   font-size: 12px;
@@ -841,5 +843,5 @@
 }
 
 .bt-apply:hover {
-  background: #83aed4;
+  background: #7cc2f5;
 }

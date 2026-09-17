@@ -92,10 +92,6 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
               <p>Solar Energy Management System</p>
             </div>
           </div>
-          <div className="system-status">
-            <span className="status-indicator status-operational"></span>
-            <span>System Operational</span>
-          </div>
         </div>
 
         <form onSubmit={handleSubmit} className="login-form">
@@ -150,12 +146,6 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             )}
           </button>
 
-          <div className="login-footer">
-            <p className="security-notice">
-              ⓘ This system is protected by enterprise-grade security.
-              Unauthorized access attempts are logged and monitored.
-            </p>
-          </div>
         </form>
 
         <div className="system-info">
@@ -166,10 +156,6 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
           <div className="info-item">
             <span className="info-label">Protocol:</span>
             <span className="info-value">HTTPS/TLS 1.3</span>
-          </div>
-          <div className="info-item">
-            <span className="info-label">Region:</span>
-            <span className="info-value">North America</span>
           </div>
         </div>
       </div>

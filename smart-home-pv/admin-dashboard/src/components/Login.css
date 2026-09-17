@@ -13,7 +13,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: linear-gradient(135deg, var(--bg-deep) 0%, var(--panel) 50%, #1a365d 100%);
+  background: linear-gradient(135deg, var(--bg-deep) 0%, var(--panel) 55%, #1c3b30 100%);
   z-index: -1;
 }
 
@@ -23,9 +23,9 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background-image: 
-    linear-gradient(rgba(100, 255, 218, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(100, 255, 218, 0.03) 1px, transparent 1px);
+  background-image:
+    linear-gradient(rgba(79, 202, 146, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(79, 202, 146, 0.04) 1px, transparent 1px);
   background-size: 50px 50px;
   animation: grid-scroll 20s linear infinite;
 }
@@ -40,13 +40,13 @@
 }
 
 .login-box {
-  background: rgba(17, 34, 64, 0.95);
+  background: rgba(38, 48, 42, 0.95);
   border: 2px solid var(--accent);
-  border-radius: 3px;
-  box-shadow: 
-    0 0 30px rgba(255, 176, 0, 0.4),
-    0 0 60px rgba(255, 176, 0, 0.08),
-    inset 0 0 20px rgba(100, 255, 218, 0.05);
+  border-radius: 4px;
+  box-shadow:
+    0 0 30px rgba(79, 202, 146, 0.35),
+    0 0 60px rgba(79, 202, 146, 0.08),
+    inset 0 0 20px rgba(79, 202, 146, 0.05);
   padding: 40px;
   max-width: 500px;
   width: 90%;
@@ -66,7 +66,7 @@
 
 .logo-icon {
   font-size: 48px;
-  background: linear-gradient(135deg, var(--accent) 0%, #00d4ff 100%);
+  background: linear-gradient(135deg, var(--accent) 0%, var(--info) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   animation: pulse 2s ease-in-out infinite;
@@ -75,11 +75,11 @@
 @keyframes pulse {
   0%, 100% {
     transform: scale(1);
-    filter: drop-shadow(0 0 10px rgba(255, 176, 0, 0.55));
+    filter: drop-shadow(0 0 10px rgba(79, 202, 146, 0.55));
   }
   50% {
     transform: scale(1.05);
-    filter: drop-shadow(0 0 20px rgba(255, 176, 0, 0.85));
+    filter: drop-shadow(0 0 20px rgba(79, 202, 146, 0.85));
   }
 }
 
@@ -88,7 +88,7 @@
   font-size: 28px;
   font-weight: 700;
   color: var(--accent);
-  font-family: 'Courier New', monospace;
+  font-family: var(--mono);
   letter-spacing: 2px;
 }
 
@@ -105,12 +105,12 @@
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: rgba(255, 176, 0, 0.08);
-  border: 1px solid rgba(255, 176, 0, 0.4);
+  background: var(--accent-dim);
+  border: 1px solid rgba(79, 202, 146, 0.4);
   border-radius: 3px;
   font-size: 12px;
   color: var(--accent);
-  font-family: 'Courier New', monospace;
+  font-family: var(--mono);
 }
 
 .status-indicator {
@@ -121,8 +121,8 @@
 }
 
 .status-operational {
-  background: #3fb950;
-  box-shadow: 0 0 10px #3fb950;
+  background: var(--ok);
+  box-shadow: 0 0 10px var(--ok);
 }
 
 @keyframes blink {
@@ -140,20 +140,20 @@
   color: var(--text);
   text-transform: uppercase;
   letter-spacing: 1px;
-  border-bottom: 2px solid rgba(255, 176, 0, 0.4);
+  border-bottom: 2px solid rgba(79, 202, 146, 0.4);
   padding-bottom: 10px;
 }
 
 .error-banner {
-  background: rgba(255, 69, 69, 0.15);
-  border: 1px solid #ff4545;
+  background: rgba(241, 107, 98, 0.15);
+  border: 1px solid var(--crit);
   border-radius: 3px;
   padding: 12px;
   margin-bottom: 20px;
   display: flex;
   align-items: center;
   gap: 10px;
-  color: #ff6b6b;
+  color: var(--crit);
   font-size: 14px;
   animation: shake 0.3s ease-in-out;
 }
@@ -192,11 +192,11 @@
   width: 100%;
   padding: 12px 15px;
   background: var(--bg-deep);
-  border: 1px solid rgba(255, 176, 0, 0.4);
+  border: 1px solid rgba(79, 202, 146, 0.4);
   border-radius: 3px;
   color: var(--text);
   font-size: 15px;
-  font-family: 'Courier New', monospace;
+  font-family: var(--mono);
   transition: all 0.3s ease;
   box-sizing: border-box;
 }
@@ -204,8 +204,8 @@
 .form-group input:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 15px rgba(255, 176, 0, 0.4);
-  background: rgba(10, 25, 47, 1);
+  box-shadow: 0 0 15px rgba(79, 202, 146, 0.35);
+  background: var(--panel-2);
 }
 
 .form-group input:disabled {
@@ -216,10 +216,10 @@
 .login-button {
   width: 100%;
   padding: 15px;
-  background: linear-gradient(135deg, var(--accent) 0%, #00d4ff 100%);
+  background: linear-gradient(135deg, var(--accent) 0%, var(--info) 100%);
   border: none;
   border-radius: 3px;
-  color: var(--bg-deep);
+  color: #10201a;
   font-size: 16px;
   font-weight: 700;
   text-transform: uppercase;
@@ -230,12 +230,12 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
-  font-family: 'Courier New', monospace;
+  font-family: var(--mono);
 }
 
 .login-button:hover:not(:disabled) {
   transform: translateY(-2px);
-  box-shadow: 0 5px 20px rgba(255, 176, 0, 0.45);
+  box-shadow: 0 5px 20px rgba(79, 202, 146, 0.45);
 }
 
 .login-button:active:not(:disabled) {
@@ -250,7 +250,7 @@
 .spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid var(--bg-deep);
+  border: 2px solid #10201a;
   border-top-color: transparent;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -269,7 +269,7 @@
 .security-notice {
   margin: 0;
   padding: 12px;
-  background: rgba(100, 255, 218, 0.05);
+  background: rgba(79, 202, 146, 0.06);
   border-left: 3px solid var(--accent);
   color: var(--muted);
   font-size: 12px;
@@ -279,7 +279,7 @@
 .system-info {
   margin-top: 25px;
   padding-top: 20px;
-  border-top: 1px solid rgba(255, 176, 0, 0.35);
+  border-top: 1px solid rgba(79, 202, 146, 0.35);
   display: flex;
   justify-content: space-between;
   flex-wrap: wrap;
@@ -302,5 +302,5 @@
 .info-value {
   font-size: 13px;
   color: var(--text);
-  font-family: 'Courier New', monospace;
+  font-family: var(--mono);
 }
