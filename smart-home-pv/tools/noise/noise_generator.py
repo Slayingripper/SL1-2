@@ -234,6 +234,12 @@ if __name__ == '__main__':
         time.sleep(0.5)
         seed_telemetry(count=120)
         seed_site_history(count=60)
+        # give the async client time to flush retained publishes
+        time.sleep(2)
+        try:
+            client.disconnect()
+        except Exception:
+            pass
         print('seeded telemetry')
         sys.exit(0)
     connect_mqtt()

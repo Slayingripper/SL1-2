@@ -24,10 +24,14 @@
       - ./logs:/opt/pv-controller/logs
       - ${HOME}/Documents:/opt/pv-controller/Documents
       - ${HOME}/smart-home-pv-logs:/opt/pv-controller/home-logs
-      # Serve the freshly-built dashboard bundle from the host so front-end
-      # changes appear on a browser refresh (run `npm run build:watch`) without
-      # rebuilding the image. Remove this line to serve the image-baked bundle.
-      - ./admin-dashboard/dist:/opt/pv-controller/admin-dashboard/dist
+      # NOTE: the dashboard bundle is baked into the image by the `dashboard`
+      # build stage in the Dockerfile. Do NOT mount ./admin-dashboard/dist here:
+      # a host path that is empty or missing shadows the baked bundle and the
+      # server falls back to the "Admin Dashboard Not Built" page. For hot
+      # reload during front-end development, run the dashboard inside the
+      # container instead:
+      #   docker compose exec pv-controller python3 -m http.server 3000 -d /src/admin-dashboard/dist
+      # or see docker-compose.dev.yml for the bind-mount override.
     logging:
       driver: json-file
       options:
@@ -47,10 +51,10 @@
       playground-net:
         ipv4_address: 172.20.0.66
     ports:
-      - "1913:1883"  # MQTT broker on host 1913 (1884 falls in Windows Hyper-V excluded range 1803-1902)
+      - "1883:1883"  # MQTT broker on host 1883 (all interfaces)
       - "9001:9001"  # WebSocket for React dashboard
     volumes:
-      - ./mosquitto-config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto-config/mosquitto.conf:/mosquitto/config/mosquitto.conf
     logging:
       driver: json-file
       options:
@@ -115,22 +119,28 @@
       context: ./tools/noise
     image: scl-challenge-smart-home-pv-seeder
     container_name: scl-challenge-smart-home-pv-seeder
-    restart: 'no'
+    restart: unless-stopped
     networks:
       playground-net:
         ipv4_address: 172.20.0.73
     environment:
       - MQTT_HOST=mosquitto
       - TZ=Asia/Nicosia
+      - SEED_INTERVAL=300
     volumes:
       - ./logs:/opt/pv-controller/logs
+      - ./tools/noise/noise_generator.py:/app/noise_generator.py:ro
+      - ./tools/noise/seed_once.py:/app/seed_once.py:ro
     logging:
       driver: json-file
       options:
         max-size: "5m"
         max-file: "2"
-    command: ["python","noise_generator.py","--seed"]
-  # --- Area map site feeders: one container feeds one site with power ----
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    command: ["sh","-c","while true; do python seed_once.py || true; sleep $${SEED_INTERVAL:-300}; done"]
+
   feeder-house-1:
     build:
       context: ./tools/noise
