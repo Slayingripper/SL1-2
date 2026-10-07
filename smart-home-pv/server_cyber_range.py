@@ -1519,16 +1519,42 @@ def mqtt_telemetry_thread():
             logger.error(f"Telemetry error: {e}")
             time.sleep(max(2.0, MQTT_TELEMETRY_INTERVAL))
 
+def mqtt_supervisor_thread():
+    """Keep the MQTT link up for the lifetime of the process.
+
+    The client used to be connected exactly once at import time. If the broker
+    was not up yet (the controller has no depends_on on mosquitto), that single
+    attempt failed, no telemetry was ever published and /admin/mqtt_data stayed
+    empty for the whole session - the dashboard charts never moved."""
+    while True:
+        try:
+            if mqtt_client is None:
+                break
+            if not mqtt_client.is_connected():
+                mqtt_client.reconnect()
+                logger.info('Reconnected to MQTT broker')
+        except Exception:
+            # Keep trying; paho's own loop may already be reconnecting.
+            pass
+        time.sleep(5)
+
+
 if HAS_PAHO:
     try:
         mqtt_client = mqtt.Client()
         mqtt_client.on_connect = on_mqtt_connect
         mqtt_client.on_message = on_mqtt_message
-        mqtt_client.connect(MQTT_BROKER, 1883, 60)
+        mqtt_client.reconnect_delay_set(min_delay=1, max_delay=30)
+        try:
+            mqtt_client.connect(MQTT_BROKER, 1883, 60)
+        except Exception as e:
+            # Broker not up yet - the supervisor below keeps retrying.
+            logger.warning(f'MQTT initial connect deferred: {e}')
         mqtt_client.loop_start()
-        
+
         # Start telemetry publisher
         threading.Thread(target=mqtt_telemetry_thread, daemon=True).start()
+        threading.Thread(target=mqtt_supervisor_thread, daemon=True).start()
         logger.info("✓ MQTT client started")
     except Exception as e:
         logger.error(f"MQTT client failed: {e}")

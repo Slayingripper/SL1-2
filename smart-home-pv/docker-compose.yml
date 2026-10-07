@@ -32,6 +32,13 @@
       # container instead:
       #   docker compose exec pv-controller python3 -m http.server 3000 -d /src/admin-dashboard/dist
       # or see docker-compose.dev.yml for the bind-mount override.
+    depends_on:
+      # The controller connects to MQTT at startup; without this the first
+      # attempt can lose the race against the broker and the dashboard charts
+      # stay empty (the in-process supervisor retries, this just avoids the
+      # gap entirely).
+      mosquitto:
+        condition: service_healthy
     logging:
       driver: json-file
       options:
