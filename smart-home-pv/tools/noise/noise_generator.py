@@ -24,8 +24,24 @@ PUBLISH_ALL_SITES = os.environ.get('NOISE_PUBLISH_SITES', '0') == '1'
 # message with a non-zero rc).
 MQTT_CONNECT_ATTEMPTS = max(1, int(os.environ.get('MQTT_CONNECT_ATTEMPTS', '30')))
 MQTT_CONNECT_BACKOFF = max(0.5, float(os.environ.get('MQTT_CONNECT_BACKOFF', '2')))
-# How often --seed-loop refreshes the retained site data (minutes).
-SEED_REFRESH_MINUTES = max(1.0, float(os.environ.get('SEED_REFRESH_MINUTES', '15')))
+def _refresh_seconds():
+    """Seed cadence. SEED_INTERVAL is in seconds (what compose sets);
+    SEED_REFRESH_MINUTES is the minutes form. Invalid values fall back to 5
+    minutes rather than crashing the container on startup."""
+    for env, scale in (('SEED_INTERVAL', 1.0), ('SEED_REFRESH_MINUTES', 60.0)):
+        raw = os.environ.get(env)
+        if not raw:
+            continue
+        try:
+            value = float(raw) * scale
+        except (TypeError, ValueError):
+            print(f'ignoring invalid {env}={raw!r}', flush=True)
+            continue
+        if value > 0:
+            return value
+    return 300.0
+
+SEED_REFRESH_SECONDS = max(60.0, _refresh_seconds())
 # Successful CONNACKs so far. The seed loop watches this to re-seed the moment
 # the broker comes back, instead of waiting out the refresh interval.
 CONNECTS = 0
@@ -299,8 +315,8 @@ def seed_loop():
     while the broker bounced) leaves that site's sparkline empty until
     something republishes. Staying alive and re-seeding keeps the Area Map and
     the per-asset views populated for good."""
-    interval = max(60.0, SEED_REFRESH_MINUTES * 60.0)
-    print(f'seeder loop up: seed now, refresh every {interval / 60:.0f} min', flush=True)
+    interval = SEED_REFRESH_SECONDS
+    print(f'seeder loop up: seed now, refresh every {interval / 60:g} min', flush=True)
     seeded_after_connect = -1
     while True:
         # Nothing in here may terminate the process: the whole point of this
@@ -400,6 +416,13 @@ if __name__ == '__main__':
         time.sleep(0.5)
         telemetry_ok = seed_telemetry(count=120)
         sites_ok = seed_site_history(count=60)
+        # paho queues publishes on its network thread, so give it a moment to
+        # flush the retained messages before the process exits.
+        time.sleep(2)
+        try:
+            client.disconnect()
+        except Exception:
+            pass
         if telemetry_ok and sites_ok:
             print('seeded telemetry', flush=True)
             sys.exit(0)
