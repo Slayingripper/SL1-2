@@ -18,8 +18,39 @@ SITE_INTERVAL = max(2.0, float(os.environ.get('SITE_INTERVAL', '5')))
 # The aggregate publisher in noise_loop() is superseded by the dedicated
 # per-site feeder containers; it can be re-enabled with NOISE_PUBLISH_SITES=1.
 PUBLISH_ALL_SITES = os.environ.get('NOISE_PUBLISH_SITES', '0') == '1'
+# Containers start in parallel, so the broker is often not accepting
+# connections yet. Retry the initial handshake instead of publishing into a
+# dead client (paho's publish() does not raise when offline, it just drops the
+# message with a non-zero rc).
+MQTT_CONNECT_ATTEMPTS = max(1, int(os.environ.get('MQTT_CONNECT_ATTEMPTS', '30')))
+MQTT_CONNECT_BACKOFF = max(0.5, float(os.environ.get('MQTT_CONNECT_BACKOFF', '2')))
+def _refresh_seconds():
+    """Seed cadence. SEED_INTERVAL is in seconds (what compose sets);
+    SEED_REFRESH_MINUTES is the minutes form. Invalid values fall back to 5
+    minutes rather than crashing the container on startup."""
+    for env, scale in (('SEED_INTERVAL', 1.0), ('SEED_REFRESH_MINUTES', 60.0)):
+        raw = os.environ.get(env)
+        if not raw:
+            continue
+        try:
+            value = float(raw) * scale
+        except (TypeError, ValueError):
+            print(f'ignoring invalid {env}={raw!r}', flush=True)
+            continue
+        if value > 0:
+            return value
+    return 300.0
 
-client = mqtt.Client(client_id='noise-generator')
+SEED_REFRESH_SECONDS = max(60.0, _refresh_seconds())
+# Successful CONNACKs so far. The seed loop watches this to re-seed the moment
+# the broker comes back, instead of waiting out the refresh interval.
+CONNECTS = 0
+# MQTT brokers drop an existing session when another client connects with the
+# same client id, so every role needs its own id (the broker enforces a 23-char
+# limit, hence the short fixed ids rather than the container hostname).
+CLIENT_ID = os.environ.get('NOISE_CLIENT_ID', '')
+
+client = None
 
 # --- Area map sites ------------------------------------------------------
 # Per-site telemetry for the Area Map view. Published on pv/telemetry/<id>
@@ -70,12 +101,14 @@ def site_sample(site, ts):
 
 def publish_sites(now=None):
     now = now if now is not None else time.time()
+    failed = 0
     for site in SITES:
-        try:
-            client.publish(f"pv/telemetry/{site['id']}",
-                           json.dumps(site_sample(site, now)), retain=True)
-        except Exception as e:
-            print('site publish failed', e)
+        if not publish_ok(f"pv/telemetry/{site['id']}",
+                          json.dumps(site_sample(site, now)), retain=True):
+            failed += 1
+    if failed:
+        print(f'{failed}/{len(SITES)} site publishes failed', flush=True)
+    return failed == 0
 
 
 def get_own_ip():
@@ -118,48 +151,144 @@ def site_loop(site_id):
 
     # Seed retained history so the sparkline is full on first dashboard load
     points = [site_sample(site, started - (59 - i) * 60) for i in range(60)]
-    try:
-        client.publish(f'pv/history/{site_id}',
-                       json.dumps({'site': site_id, 'points': points, 'seeder': info}),
-                       retain=True)
-    except Exception as e:
-        print('history seed failed', e)
+    history = {'site': site_id, 'points': points, 'seeder': info}
+    publish_ok(f'pv/history/{site_id}', json.dumps(history), retain=True)
+    seeded_after_connect = CONNECTS
 
     seq = 0
     while True:
+        # paho's loop auto-reconnects after a drop; ensure_network_loop() also
+        # covers a first handshake that never came up, and a dead loop thread.
+        if not ensure_network_loop():
+            time.sleep(MQTT_CONNECT_BACKOFF)
+        elif CONNECTS != seeded_after_connect:
+            # Came back from an outage: re-arm the retained history so a late
+            # broker never leaves the site dark.
+            publish_ok(f'pv/history/{site_id}', json.dumps(history), retain=True)
+            seeded_after_connect = CONNECTS
+            print('feeder reconnected - telemetry resumed', flush=True)
         seq += 1
         now = time.time()
         payload = site_sample(site, now)
         payload['seeder'] = dict(info, seq=seq, uptime_s=round(now - started, 1))
-        try:
-            client.publish(f'pv/telemetry/{site_id}', json.dumps(payload), retain=True)
-        except Exception as e:
-            print('site publish failed', e)
+        publish_ok(f'pv/telemetry/{site_id}', json.dumps(payload), retain=True)
         time.sleep(SITE_INTERVAL + random.uniform(0, SITE_INTERVAL * 0.3))
 
 
 def seed_site_history(count=60):
     """Retained per-site history so map sparklines are full on first load."""
     now = time.time()
+    ok = True
     for site in SITES:
         points = [site_sample(site, now - (count - 1 - i) * 60) for i in range(count)]
-        try:
-            client.publish(f"pv/history/{site['id']}",
-                           json.dumps({'site': site['id'], 'points': points}), retain=True)
-        except Exception as e:
-            print('history seed failed', e)
+        if not publish_ok(f"pv/history/{site['id']}",
+                          json.dumps({'site': site['id'], 'points': points}), retain=True):
+            ok = False
         time.sleep(0.05)
-    publish_sites(now)
+    return publish_sites(now) and ok
 
 
-def connect_mqtt():
+def make_client(client_id):
+    """Create an MQTT client that works with paho-mqtt 1.x and 2.x."""
+    client_id = CLIENT_ID or client_id
     try:
-        client.connect(MQTT_HOST, 1883, 60)
-        client.loop_start()
-        return True
+        c = mqtt.Client(client_id=client_id,
+                        callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+    except (AttributeError, TypeError):
+        c = mqtt.Client(client_id=client_id)
+    # Registered before connecting so the CONNACK handler is live from the
+    # first handshake.
+    c.on_connect = _on_connect
+    c.on_disconnect = _on_disconnect
+    return c
+
+
+def _on_connect(_client, _userdata, _flags, reason_code, _properties=None):
+    """Callback API v2 signature (v1 passes rc in the reason_code slot)."""
+    global CONNECTS
+    rc = getattr(reason_code, 'value', reason_code)
+    try:
+        rc = int(rc)
+    except (TypeError, ValueError):
+        rc = -1
+    if rc == 0:
+        CONNECTS += 1
+        print(f'MQTT connected to {MQTT_HOST}', flush=True)
+    else:
+        print(f'MQTT connection refused (rc={rc})', flush=True)
+
+
+def _on_disconnect(_client, _userdata, *args):
+    """The network loop reconnects on its own; just make the gap visible."""
+    print('MQTT disconnected - reconnecting in background', flush=True)
+
+
+def _wait_connected(timeout=5.0):
+    """Give the network loop a moment to register CONNACK."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if client.is_connected():
+            return True
+        time.sleep(0.1)
+    return client.is_connected()
+
+
+def connect_mqtt(attempts=None):
+    """Connect to the broker, retrying with capped exponential backoff.
+
+    Returns True once the broker accepted the connection and the network loop
+    is running (paho then reconnects by itself if the link drops later)."""
+    attempts = MQTT_CONNECT_ATTEMPTS if attempts is None else max(1, attempts)
+    for attempt in range(1, attempts + 1):
+        try:
+            client.reconnect_delay_set(min_delay=1, max_delay=30)
+            client.connect(MQTT_HOST, 1883, 60)
+            client.loop_start()
+            if _wait_connected():
+                return True
+            print(f'MQTT handshake did not complete (attempt {attempt}/{attempts})', flush=True)
+            client.loop_stop()
+        except Exception as e:
+            print(f'MQTT connect attempt {attempt}/{attempts} failed: {e}', flush=True)
+        # Exponential backoff, capped so a long outage still retries often.
+        time.sleep(min(MQTT_CONNECT_BACKOFF * (2 ** (attempt - 1)), 30.0))
+    return False
+
+
+def ensure_network_loop():
+    """Guarantee the paho network thread is running before we publish.
+
+    paho's loop only auto-reconnects if it is still running; if it ever died
+    (or never started because the first connect failed) the client would sit
+    there silently accepting-and-dropping publishes forever. This brings it
+    back if needed, and reports whether the client is genuinely usable."""
+    if not client.is_connected():
+        if not connect_mqtt(attempts=1):
+            return False
+    elif not getattr(client, '_thread', None):
+        try:
+            client.loop_start()
+        except Exception as e:
+            print(f'failed to restart network loop: {e}', flush=True)
+            return False
+    return client.is_connected()
+
+
+def publish_ok(topic, payload, retain=False, qos=0):
+    """Publish and verify paho accepted the message.
+
+    Returns False (instead of silently dropping) when the client is offline so
+    callers can surface the problem rather than pretending the seed worked."""
+    try:
+        info = client.publish(topic, payload, qos=qos, retain=retain)
     except Exception as e:
-        print('MQTT connect failed', e)
+        print(f'publish error on {topic}: {e}', flush=True)
         return False
+    rc = getattr(info, 'rc', 0)
+    if rc != 0:
+        print(f'publish dropped on {topic}: rc={rc}', flush=True)
+        return False
+    return True
 
 
 def seed_telemetry(count=60):
@@ -171,21 +300,66 @@ def seed_telemetry(count=60):
         curve = max(0.12, pow(phase, 0.6) * pow(1.0 - phase, 0.25))
         power_kw = round(random.uniform(2.8, 4.6) * curve + 0.15, 3)
         payload = {'ts': base + i * 60, 'power_kw': power_kw}
-        try:
-            client.publish('pv/telemetry', json.dumps(payload))
-        except Exception as e:
-            print('seed publish failed', e)
-            break
+        if not publish_ok('pv/telemetry', json.dumps(payload)):
+            return False
         time.sleep(0.05)
+    return True
+
+
+def seed_loop():
+    """Seed once, then refresh the retained site data on an interval.
+
+    The dashboard hydrates from the retained pv/telemetry/+ and pv/history/+
+    messages. They are held in the broker's store, so anything that resets it
+    (broker restart with persistence off, wiped volume, a feeder that was down
+    while the broker bounced) leaves that site's sparkline empty until
+    something republishes. Staying alive and re-seeding keeps the Area Map and
+    the per-asset views populated for good."""
+    interval = SEED_REFRESH_SECONDS
+    print(f'seeder loop up: seed now, refresh every {interval / 60:g} min', flush=True)
+    seeded_after_connect = -1
+    while True:
+        # Nothing in here may terminate the process: the whole point of this
+        # loop is that it outlives transient broker/publish failures.
+        try:
+            if not ensure_network_loop():
+                # The refresh loop never exits on a broker outage - it keeps
+                # trying and re-seeds as soon as the broker is back.
+                time.sleep(MQTT_CONNECT_BACKOFF)
+                continue
+            # Re-seed on a fresh connection as well as on the timer: a broker
+            # restart (even a persistent one) can leave retained data missing
+            # or stale, and the dashboard is watching.
+            if CONNECTS != seeded_after_connect:
+                if seeded_after_connect != -1:
+                    # Only the retained data is worth re-sending on a
+                    # reconnect; the pv/telemetry burst has been consumed.
+                    print('broker reconnected - re-seeding retained data', flush=True)
+                    seed_site_history(count=60)
+                else:
+                    seed_telemetry(count=120)
+                    seed_site_history(count=60)
+                    print('seeded telemetry', flush=True)
+                seeded_after_connect = CONNECTS
+            # Sleep in short slices so a reconnect is noticed promptly.
+            deadline = time.time() + interval
+            while time.time() < deadline and CONNECTS == seeded_after_connect:
+                time.sleep(min(2.0, max(0.0, deadline - time.time())))
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            print(f'seed loop error (retrying): {e}', flush=True)
+            time.sleep(MQTT_CONNECT_BACKOFF)
 
 
 def noise_loop():
     cycle = 0
     while True:
         try:
+            ensure_network_loop()
             # MQTT: publish background sensor noise
             payload = {'ts': time.time(), 'value': random.randint(0, 100)}
-            client.publish('pv/telemetry', json.dumps(payload))
+            publish_ok('pv/telemetry', json.dumps(payload))
 
             # Aggregate per-site feed — off by default now that each map site
             # has its own dedicated feeder container (see docker-compose.yml)
@@ -225,16 +399,41 @@ if __name__ == '__main__':
         target = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else ''
         # Each feeder needs its own MQTT client id — sharing one id makes the
         # broker disconnect the other clients on every connect.
-        client = mqtt.Client(client_id=f'feeder-{target}')
+        client = make_client(f'feeder-{target}')
         connect_mqtt()
         time.sleep(0.5)
         site_loop(target)
     if '--seed' in sys.argv:
-        connect_mqtt()
+        # Own client id: sharing one with the noise container made the broker
+        # kick both sessions off, so the seed was published into the void.
+        client = make_client('seed')
+        # A failed seed is worse than a failed seed that says so: exit non-zero
+        # so compose (restart: on-failure) retries instead of leaving the
+        # dashboard with empty charts for the whole session.
+        if not connect_mqtt():
+            print(f'ABORT: could not reach MQTT broker at {MQTT_HOST}', flush=True)
+            sys.exit(1)
         time.sleep(0.5)
-        seed_telemetry(count=120)
-        seed_site_history(count=60)
-        print('seeded telemetry')
-        sys.exit(0)
+        telemetry_ok = seed_telemetry(count=120)
+        sites_ok = seed_site_history(count=60)
+        # paho queues publishes on its network thread, so give it a moment to
+        # flush the retained messages before the process exits.
+        time.sleep(2)
+        try:
+            client.disconnect()
+        except Exception:
+            pass
+        if telemetry_ok and sites_ok:
+            print('seeded telemetry', flush=True)
+            sys.exit(0)
+        print('ABORT: seed published with failures', flush=True)
+        sys.exit(1)
+    if '--seed-loop' in sys.argv:
+        # What compose runs: seed, then keep the retained data fresh forever so
+        # the dashboard is never left without site history.
+        client = make_client('seed')
+        connect_mqtt()
+        seed_loop()
+    client = make_client('noise')
     connect_mqtt()
     noise_loop()

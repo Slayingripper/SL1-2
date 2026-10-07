@@ -24,10 +24,21 @@
       - ./logs:/opt/pv-controller/logs
       - ${HOME}/Documents:/opt/pv-controller/Documents
       - ${HOME}/smart-home-pv-logs:/opt/pv-controller/home-logs
-      # Serve the freshly-built dashboard bundle from the host so front-end
-      # changes appear on a browser refresh (run `npm run build:watch`) without
-      # rebuilding the image. Remove this line to serve the image-baked bundle.
-      - ./admin-dashboard/dist:/opt/pv-controller/admin-dashboard/dist
+      # NOTE: the dashboard bundle is baked into the image by the `dashboard`
+      # build stage in the Dockerfile. Do NOT mount ./admin-dashboard/dist here:
+      # a host path that is empty or missing shadows the baked bundle and the
+      # server falls back to the "Admin Dashboard Not Built" page. For hot
+      # reload during front-end development, run the dashboard inside the
+      # container instead:
+      #   docker compose exec pv-controller python3 -m http.server 3000 -d /src/admin-dashboard/dist
+      # or see docker-compose.dev.yml for the bind-mount override.
+    depends_on:
+      # The controller connects to MQTT at startup; without this the first
+      # attempt can lose the race against the broker and the dashboard charts
+      # stay empty (the in-process supervisor retries, this just avoids the
+      # gap entirely).
+      mosquitto:
+        condition: service_healthy
     logging:
       driver: json-file
       options:
@@ -47,10 +58,15 @@
       playground-net:
         ipv4_address: 172.20.0.66
     ports:
-      - "1913:1883"  # MQTT broker on host 1913 (1884 falls in Windows Hyper-V excluded range 1803-1902)
+      - "1883:1883"  # MQTT broker on host 1883 (all interfaces)
       - "9001:9001"  # WebSocket for React dashboard
     volumes:
-      - ./mosquitto-config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      # Not :ro - the image entrypoint chowns this file at startup and fails
+      # noisily on a read-only bind mount.
+      - ./mosquitto-config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      # Retained messages (the data the dashboard hydrates from) live in the
+      # broker's store file - keep it across broker/container recreations.
+      - mosquitto-data:/mosquitto/data
     logging:
       driver: json-file
       options:
@@ -58,9 +74,11 @@
         max-file: "2"
     healthcheck:
       test: ["CMD", "sh", "-c", "mosquitto_sub -h 127.0.0.1 -t '$$SYS/#' -C 1 -W 1 || exit 1"]
-      interval: 30s
+      # The seeder and the site feeders gate on this condition, so keep the
+      # probe frequent - a 30s interval made `up -d` idle for half a minute.
+      interval: 5s
       timeout: 5s
-      retries: 3
+      retries: 5
 
   noise:
     build:
@@ -82,8 +100,10 @@
         max-size: "5m"
         max-file: "2"
     depends_on:
-      - mosquitto
-      - pv-controller
+      mosquitto:
+        condition: service_healthy
+      pv-controller:
+        condition: service_started
   victim:
     build:
       context: ./tools/victim
@@ -115,21 +135,40 @@
       context: ./tools/noise
     image: scl-challenge-smart-home-pv-seeder
     container_name: scl-challenge-smart-home-pv-seeder
-    restart: 'no'
+    # Long-running: seeds the retained per-site data the dashboard hydrates
+    # from, then refreshes it on an interval and immediately after any broker
+    # reconnect, so the Area Map / per-asset views are never left without
+    # history.
+    restart: unless-stopped
     networks:
       playground-net:
         ipv4_address: 172.20.0.73
     environment:
       - MQTT_HOST=mosquitto
       - TZ=Asia/Nicosia
+      # Refresh cadence for the retained site data, in minutes.
+      - SEED_INTERVAL=300
     volumes:
       - ./logs:/opt/pv-controller/logs
+      # Bind-mounted so seeder changes take effect on `up -d` without a rebuild.
+      - ./tools/noise/noise_generator.py:/app/noise_generator.py:ro
     logging:
       driver: json-file
       options:
         max-size: "5m"
         max-file: "2"
-    command: ["python","noise_generator.py","--seed"]
+    depends_on:
+      # Wait for the broker to be genuinely accepting connections, not just
+      # started - a race here loses the seed entirely.
+      mosquitto:
+        condition: service_healthy
+    # --seed-loop seeds now, refreshes on the interval, and re-seeds the moment
+    # the broker reconnects. This replaces the previous
+    # `while true; do python seed_once.py; sleep ...` wrapper, which needed a
+    # seed_once.py that was never committed and could not react to a broker
+    # restart (the shell loop just slept through the outage).
+    command: ["python","noise_generator.py","--seed-loop"]
+
   # --- Area map site feeders: one container feeds one site with power ----
   feeder-house-1:
     build:
@@ -146,7 +185,8 @@
       - TZ=Asia/Nicosia
     command: ["python", "noise_generator.py", "--site", "house-1"]
     depends_on:
-      - mosquitto
+      mosquitto:
+        condition: service_healthy
     logging:
       driver: json-file
       options:
@@ -167,7 +207,8 @@
       - TZ=Asia/Nicosia
     command: ["python", "noise_generator.py", "--site", "house-2"]
     depends_on:
-      - mosquitto
+      mosquitto:
+        condition: service_healthy
     logging:
       driver: json-file
       options:
@@ -188,7 +229,8 @@
       - TZ=Asia/Nicosia
     command: ["python", "noise_generator.py", "--site", "house-3"]
     depends_on:
-      - mosquitto
+      mosquitto:
+        condition: service_healthy
     logging:
       driver: json-file
       options:
@@ -209,7 +251,8 @@
       - TZ=Asia/Nicosia
     command: ["python", "noise_generator.py", "--site", "pv-plant"]
     depends_on:
-      - mosquitto
+      mosquitto:
+        condition: service_healthy
     logging:
       driver: json-file
       options:
@@ -230,7 +273,8 @@
       - TZ=Asia/Nicosia
     command: ["python", "noise_generator.py", "--site", "army-base"]
     depends_on:
-      - mosquitto
+      mosquitto:
+        condition: service_healthy
     logging:
       driver: json-file
       options:
@@ -263,3 +307,7 @@
 networks:
   playground-net:
     external: true
+
+volumes:
+  # MQTT retained-message store (see mosquitto-config/mosquitto.conf)
+  mosquitto-data:

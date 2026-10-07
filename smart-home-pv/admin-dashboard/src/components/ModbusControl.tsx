@@ -43,7 +43,7 @@ interface AssetProfile {
 const STALE_AFTER_S = 30;
 
 const ModbusControl: React.FC<ModbusControlProps> = ({ token, siteData }) => {
-  const [assetId, setAssetId] = useState('controller');
+  const [assetId, setAssetId] = useState(MAP_SITES[0].id);
   const [coilAddress, setCoilAddress] = useState('1');
   const [coilValue, setCoilValue] = useState(false);
   const [registerAddress, setRegisterAddress] = useState('0');
@@ -233,7 +233,6 @@ const ModbusControl: React.FC<ModbusControlProps> = ({ token, siteData }) => {
             onChange={e => setAssetId(e.target.value)}
             aria-label="Select Modbus target asset"
           >
-            <option value="controller">CY-LIM-042 · Plant Controller</option>
             <optgroup label="Area map assets">
               {MAP_SITES.map(s => (
                 <option key={s.id} value={s.id}>

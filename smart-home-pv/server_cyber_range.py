@@ -55,6 +55,9 @@ logger = logging.getLogger(__name__)
 DOCUMENTS_DIR = os.getenv('DOCUMENTS_DIR', '/opt/pv-controller/Documents')
 ACTION_LOGS_DIR = os.path.join(DOCUMENTS_DIR, 'actions')
 TICKETS_DIR = os.path.join(DOCUMENTS_DIR, 'tickets')
+# Ticket retention: only tickets raised within the last hour are kept in the
+# store. Set to 0 (or negative) to disable the sweep entirely.
+TICKET_RETENTION_MINUTES = int(os.getenv('TICKET_RETENTION_MINUTES', '60'))
 HOST_HOME_LOGS_DIR = os.getenv('HOST_HOME_LOGS_DIR', '/opt/pv-controller/home-logs')
 ADMIN_UI_LOG_FILE = os.path.join(HOST_HOME_LOGS_DIR, 'admin_dashboard_actions.log')
 
@@ -236,6 +239,7 @@ class ChallengeState:
                 id INTEGER PRIMARY KEY, created TEXT, subject TEXT, description TEXT,
                 reporter TEXT, source TEXT, severity TEXT, category TEXT, ip TEXT,
                 status TEXT, count INTEGER, last_seen TEXT);
+            CREATE INDEX IF NOT EXISTS idx_tickets_created ON tickets(created);
         ''')
         self._db.commit()
         # One-time migration from the old JSON snapshots.
@@ -261,6 +265,8 @@ class ChallengeState:
                 logger.exception('Ticket JSON migration failed')
         self._db_load_events()
         self._db_load_tickets()
+        # Enforce the retention window on boot so stale rows never come back.
+        self.prune_tickets()
 
     def _db_insert_event(self, event, commit=True):
         self._db.execute(
@@ -301,6 +307,38 @@ class ChallengeState:
             ' FROM tickets ORDER BY id ASC').fetchall()
         self.tickets = [dict(r) for r in rows]
         self.ticket_seq = max([t['id'] for t in self.tickets], default=0)
+
+    def prune_tickets(self, max_age_minutes=None):
+        """Delete tickets older than the retention window (default: 60 minutes).
+
+        A single SQL DELETE clears the durable store; the same cut-off is then
+        applied to the in-memory list (and the JSON fallback snapshot) so the
+        admin/blue-team views never surface expired tickets. ticket_seq is left
+        untouched so IDs are never handed out twice."""
+        window = TICKET_RETENTION_MINUTES if max_age_minutes is None else int(max_age_minutes)
+        if window <= 0:
+            return 0
+        cutoff = (datetime.now() - timedelta(minutes=window)).isoformat()
+        with self.lock:
+            removed = 0
+            if self._db is not None:
+                try:
+                    cur = self._db.execute(
+                        'DELETE FROM tickets WHERE created IS NULL OR created < ?', (cutoff,))
+                    self._db.commit()
+                    removed = cur.rowcount or 0
+                except Exception:
+                    logger.exception('Failed to prune expired tickets from SQLite')
+                    return 0
+            kept = [t for t in self.tickets if str(t.get('created') or '') >= cutoff]
+            if len(kept) != len(self.tickets):
+                removed = max(removed, len(self.tickets) - len(kept))
+                self.tickets = kept
+                if self._db is None:
+                    self._save_tickets_safe()
+        if removed:
+            logger.info('Pruned %s ticket(s) older than %s minutes', removed, window)
+        return removed
 
     def add_ticket(self, subject, description, reporter, source='user',
                    severity=None, category=None, ip=None):
@@ -618,6 +656,29 @@ class ChallengeState:
         except Exception:
             raise
 
+    def clear_alerts(self):
+        """Wipe every alert store: security events, failed logins, anomalous
+        telemetry and the notification pop-up feed. Used when an admin logs in
+        so the dashboards always start from a clean slate. Returns the total
+        number of dropped alerts."""
+        with self.lock:
+            cleared = (len(self.security_events) + len(self.failed_logins)
+                       + len(self.anomalous_data) + len(self.notifications))
+            self.security_events = []
+            self.failed_logins = []
+            self.anomalous_data = []
+            self.notifications = []
+            if self._db is not None:
+                try:
+                    self._db.execute('DELETE FROM security_events')
+                    self._db.commit()
+                except Exception:
+                    logger.exception('Failed to clear security_events from SQLite')
+            self._save_security_events()
+            self._save_failed_logins()
+            self._save_anomalous_data()
+        return cleared
+
     def _load_anomalous_data(self):
         """Load persisted anomalous data from disk"""
         if not os.path.exists(self.anomalous_data_file):
@@ -650,6 +711,24 @@ state = ChallengeState()
 # ============================================================================
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin123"
+# Additional HMI administrator accounts. They get the same admin role as the
+# primary account (full dashboard access, same tokens/permissions); only the
+# credentials differ. Passwords are overridable via env for lab deployments.
+ADMIN_EXTRA_USERS = {
+    'admin2': os.getenv('ADMIN2_PASSWORD', 'admin123'),
+    'admin3': os.getenv('ADMIN3_PASSWORD', 'admin123'),
+}
+
+def _admin_accounts():
+    """username -> password for every account with the admin role."""
+    accounts = {ADMIN_USERNAME: ADMIN_PASSWORD}
+    accounts.update(ADMIN_EXTRA_USERS)
+    return accounts
+
+def _is_admin_login(username, password):
+    """True when the credentials match any admin account (primary or extra)."""
+    return _admin_accounts().get(username) == password
+
 WIFI_PASSWORD = "super-secret-123"     # Discovered via /wifi_scan, but NOT admin password
 
 # Blue team operator credentials
@@ -695,13 +774,19 @@ def _load_admin_password():
             stored = data.get('password')
             if stored and isinstance(stored, str) and len(stored) >= 6:
                 ADMIN_PASSWORD = stored
+            extra = data.get('extra')
+            if isinstance(extra, dict):
+                for name, pw in extra.items():
+                    if name in ADMIN_EXTRA_USERS and isinstance(pw, str) and len(pw) >= 6:
+                        ADMIN_EXTRA_USERS[name] = pw
     except Exception:
         logger.exception('Failed to load admin credentials')
 
 def _save_admin_password(password):
     try:
         with open(ADMIN_CRED_FILE, 'w') as f:
-            json.dump({'username': ADMIN_USERNAME, 'password': password}, f)
+            json.dump({'username': ADMIN_USERNAME, 'password': password,
+                       'extra': dict(ADMIN_EXTRA_USERS)}, f)
     except Exception:
         logger.exception('Failed to persist admin credentials')
 
@@ -1092,6 +1177,18 @@ def blocked_ips_maintenance_thread():
                     logger.exception(f"Failed to auto-unblock IP: {ip}")
         time.sleep(10)
 
+def ticket_retention_thread():
+    """Periodically delete tickets that fell out of the retention window."""
+    interval = max(30, min(TICKET_RETENTION_MINUTES or 300, 300))
+    while True:
+        time.sleep(interval)
+        if TICKET_RETENTION_MINUTES <= 0:
+            continue
+        try:
+            state.prune_tickets()
+        except Exception:
+            logger.exception('Ticket retention sweep failed')
+
 # ============================================================================
 # ARP SPOOFING DETECTION
 # ============================================================================
@@ -1177,6 +1274,8 @@ def arp_monitor_thread():
 threading.Thread(target=arp_monitor_thread, daemon=True).start()
 # Start blocked IP maintenance thread
 threading.Thread(target=blocked_ips_maintenance_thread, daemon=True).start()
+# Start ticket retention sweep (keeps only the last TICKET_RETENTION_MINUTES)
+threading.Thread(target=ticket_retention_thread, daemon=True).start()
 
 # ============================================================================
 # MQTT INTEGRATION (Session tokens only in network traffic)
@@ -1420,16 +1519,42 @@ def mqtt_telemetry_thread():
             logger.error(f"Telemetry error: {e}")
             time.sleep(max(2.0, MQTT_TELEMETRY_INTERVAL))
 
+def mqtt_supervisor_thread():
+    """Keep the MQTT link up for the lifetime of the process.
+
+    The client used to be connected exactly once at import time. If the broker
+    was not up yet (the controller has no depends_on on mosquitto), that single
+    attempt failed, no telemetry was ever published and /admin/mqtt_data stayed
+    empty for the whole session - the dashboard charts never moved."""
+    while True:
+        try:
+            if mqtt_client is None:
+                break
+            if not mqtt_client.is_connected():
+                mqtt_client.reconnect()
+                logger.info('Reconnected to MQTT broker')
+        except Exception:
+            # Keep trying; paho's own loop may already be reconnecting.
+            pass
+        time.sleep(5)
+
+
 if HAS_PAHO:
     try:
         mqtt_client = mqtt.Client()
         mqtt_client.on_connect = on_mqtt_connect
         mqtt_client.on_message = on_mqtt_message
-        mqtt_client.connect(MQTT_BROKER, 1883, 60)
+        mqtt_client.reconnect_delay_set(min_delay=1, max_delay=30)
+        try:
+            mqtt_client.connect(MQTT_BROKER, 1883, 60)
+        except Exception as e:
+            # Broker not up yet - the supervisor below keeps retrying.
+            logger.warning(f'MQTT initial connect deferred: {e}')
         mqtt_client.loop_start()
-        
+
         # Start telemetry publisher
         threading.Thread(target=mqtt_telemetry_thread, daemon=True).start()
+        threading.Thread(target=mqtt_supervisor_thread, daemon=True).start()
         logger.info("✓ MQTT client started")
     except Exception as e:
         logger.error(f"MQTT client failed: {e}")
@@ -1799,7 +1924,7 @@ def admin_login():
 
     # ── Credential check ───────────────────────────────────────────────
     is_blueteam = (username == BLUETEAM_USERNAME and password == BLUETEAM_PASSWORD)
-    is_admin     = (username == ADMIN_USERNAME  and password == ADMIN_PASSWORD)
+    is_admin     = _is_admin_login(username, password)
 
     # ── Blue-team rate-limit (only active when blueteam is logged in) ───
     # Throttles brute-force (invalid) attempts only; operators with valid
@@ -1854,8 +1979,19 @@ def admin_login():
                                  f'Admin login successful from {client_ip}',
                                  f'User {username} authenticated successfully',
                                  'Authentication Service', ip=client_ip)
+        # Operator takes over the console: start from a clean alert board so the
+        # dashboards don't show stale incidents from the previous session.
+        cleared_alerts = 0
+        try:
+            cleared_alerts = state.clear_alerts()
+            write_action_log('alerts_cleared_on_login', actor=username,
+                             details={'ip': client_ip, 'cleared': cleared_alerts})
+            logger.info(f"🧹 Alerts cleared on admin login by {username}: {cleared_alerts} entries")
+        except Exception:
+            logger.exception('Failed to clear alerts on admin login')
         logger.info(f"✓ Admin authenticated: {username}")
-        return jsonify({"token": token, "username": username, "role": "admin", "expires_in": 1800})
+        return jsonify({"token": token, "username": username, "role": "admin",
+                        "expires_in": 1800, "cleared_alerts": cleared_alerts})
     
     # Track failed login
     try:
@@ -2005,12 +2141,13 @@ def blueteam_list_users():
     token = request.headers.get('Authorization', '').removeprefix('Bearer ').strip()
     if not _validate_blueteam_token(token):
         return jsonify({'error': 'Unauthorized'}), 401
-    return jsonify({'users': [
-        {'username': ADMIN_USERNAME, 'role': 'admin',
-         'description': 'HMI administrator — full SCADA dashboard access'},
-        {'username': BLUETEAM_USERNAME, 'role': 'blueteam',
-         'description': 'Blue team operator — defense console access'},
-    ]})
+    return jsonify({'users': (
+        [{'username': u, 'role': 'admin',
+          'description': 'HMI administrator — full SCADA dashboard access'}
+         for u in _admin_accounts()]
+        + [{'username': BLUETEAM_USERNAME, 'role': 'blueteam',
+            'description': 'Blue team operator — defense console access'}]
+    )})
 
 
 @app.route('/api/blueteam/users/change-password', methods=['POST'])
@@ -2027,23 +2164,28 @@ def blueteam_user_change_password():
     new_pw = data.get('new_password') or ''
     confirm = data.get('confirm_password')
 
-    if username not in (ADMIN_USERNAME, BLUETEAM_USERNAME):
+    if username not in (*_admin_accounts(), BLUETEAM_USERNAME):
         return jsonify({'error': 'Unknown user'}), 404
     if len(new_pw) < 6:
         return jsonify({'error': 'New password must be at least 6 characters'}), 400
     if confirm is not None and new_pw != confirm:
         return jsonify({'error': 'New password confirmation does not match'}), 400
 
-    if username == ADMIN_USERNAME:
-        if new_pw == ADMIN_PASSWORD:
-            return jsonify({'error': 'New password must differ from the current password'}), 400
-        ADMIN_PASSWORD = new_pw
-        _save_admin_password(new_pw)
-    else:
+    if username == BLUETEAM_USERNAME:
         if new_pw == BLUETEAM_PASSWORD:
             return jsonify({'error': 'New password must differ from the current password'}), 400
         BLUETEAM_PASSWORD = new_pw
         _save_blueteam_password(new_pw)
+    elif username in ADMIN_EXTRA_USERS:
+        if new_pw == ADMIN_EXTRA_USERS[username]:
+            return jsonify({'error': 'New password must differ from the current password'}), 400
+        ADMIN_EXTRA_USERS[username] = new_pw
+        _save_admin_password(ADMIN_PASSWORD)
+    else:
+        if new_pw == ADMIN_PASSWORD:
+            return jsonify({'error': 'New password must differ from the current password'}), 400
+        ADMIN_PASSWORD = new_pw
+        _save_admin_password(new_pw)
 
     state.add_security_event('high', 'Authentication',
                              f'Password reset for user: {username}',
@@ -2646,6 +2788,36 @@ def admin_mqtt_data_compat():
     return jsonify(mqtt_series[-200:])
 
 
+@app.route('/admin/publish_telemetry', methods=['POST'])
+def admin_publish_telemetry_compat():
+    """Publish a telemetry point on pv/telemetry (documented testing endpoint).
+
+    The point is also appended to the in-memory series so the live chart and
+    /admin/mqtt_data reflect it immediately, mirroring server.py behaviour."""
+    global mqtt_series
+    data = request.get_json(silent=True) or {}
+    if not HAS_PAHO:
+        return jsonify({'error': 'mqtt not available on server'}), 500
+    payload = dict(data)
+    power = payload.get('power_kw') if 'power_kw' in payload else payload.get('power', payload.get('value'))
+    try:
+        if mqtt_client is not None and mqtt_client.is_connected():
+            mqtt_client.publish('pv/telemetry', json.dumps(payload), qos=0)
+        else:
+            pub = mqtt.Client()
+            pub.connect(MQTT_BROKER, 1883, 60)
+            pub.publish('pv/telemetry', json.dumps(payload))
+            pub.disconnect()
+    except Exception:
+        logger.exception('Failed to publish telemetry on pv/telemetry')
+        return jsonify({'error': 'mqtt publish failed'}), 500
+    if isinstance(power, (int, float)):
+        mqtt_series.append({'ts': time.time(), 'value': power, 'power': power})
+        if len(mqtt_series) > 600:
+            mqtt_series = mqtt_series[-600:]
+    return jsonify({'result': 'ok'})
+
+
 @app.route('/replayer/state', methods=['GET', 'POST'])
 def replayer_state_compat():
     """Legacy replayer endpoint used by replayer sidecar."""
@@ -2653,6 +2825,15 @@ def replayer_state_compat():
         replayer_state['last_played'] = time.time()
         return jsonify({'result': 'ok'})
     return jsonify({'running': replayer_state['running'], 'last_played': replayer_state['last_played']})
+
+
+@app.route('/logs/<path:filename>', methods=['GET'])
+def logs_serve(filename):
+    """Read-only download of files from the logs directory (traffic.pcap, ...)."""
+    safe_path = os.path.join('/opt/pv-controller/logs', os.path.basename(filename))
+    if not os.path.isfile(safe_path):
+        abort(404)
+    return send_from_directory('/opt/pv-controller/logs', os.path.basename(filename))
 
 
 @app.route('/victim/log', methods=['POST'])
@@ -3253,10 +3434,11 @@ def init_database():
         )
     ''')
     
-    # Insert admin user
-    password_hash = hashlib.sha256(ADMIN_PASSWORD.encode()).hexdigest()
-    cur.execute('INSERT OR REPLACE INTO users (username, password) VALUES (?, ?)',
-                (ADMIN_USERNAME, password_hash))
+    # Insert every admin account (primary + extras)
+    for _username, _password in _admin_accounts().items():
+        password_hash = hashlib.sha256(_password.encode()).hexdigest()
+        cur.execute('INSERT OR REPLACE INTO users (username, password) VALUES (?, ?)',
+                    (_username, password_hash))
     
     # Devices table
     cur.execute('''

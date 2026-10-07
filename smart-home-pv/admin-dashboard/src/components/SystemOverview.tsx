@@ -151,7 +151,7 @@ const SystemOverview: React.FC<SystemOverviewProps> = ({
 }) => {
   const sceneNow = now || new Date();
   const [notifFeed, setNotifFeed] = useState<DashNotification[]>([]);
-  const [assetId, setAssetId] = useState('controller');
+  const [assetId, setAssetId] = useState(MAP_SITES[0].id);
   const [section, setSection] = useState<'summary' | 'production' | 'equipment' | 'alerts'>('summary');
 
   useEffect(() => {
@@ -336,7 +336,6 @@ const SystemOverview: React.FC<SystemOverviewProps> = ({
             onChange={e => setAssetId(e.target.value)}
             aria-label="Select asset to monitor"
           >
-            <option value="controller">CY-LIM-042 · Plant Controller</option>
             <optgroup label="Area map assets">
               {MAP_SITES.map(s => (
                 <option key={s.id} value={s.id}>

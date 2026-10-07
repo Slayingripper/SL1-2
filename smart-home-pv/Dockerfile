@@ -1,3 +1,14 @@
+FROM node:20-alpine AS dashboard
+
+WORKDIR /build
+
+COPY admin-dashboard/package.json admin-dashboard/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY admin-dashboard/ ./
+RUN npm run build
+
+
 FROM python:3.11-slim-bookworm
 
 ARG APP_DIR=/opt/pv-controller
@@ -18,7 +29,7 @@ COPY server.py $APP_DIR/
 COPY server_cyber_range.py $APP_DIR/
 COPY static/ $APP_DIR/static/
 COPY scripts/ $APP_DIR/scripts/
-COPY admin-dashboard/dist/ $APP_DIR/admin-dashboard/dist/
+COPY --from=dashboard /build/dist/ $APP_DIR/admin-dashboard/dist/
 
 EXPOSE 80 15002
 
