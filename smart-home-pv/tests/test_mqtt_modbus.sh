@@ -21,23 +21,25 @@ fi
 echo "MQTT path ok"
 
 echo "Testing Modbus path"
-# Try pymodbus client if present
-if python3 - << 'PY' 2>/dev/null
-import importlib,sys
-sys.exit(0 if importlib.util.find_spec('pymodbus') else 1)
+# Write the HALT coil with a plain Modbus/TCP frame (function code 05) so the
+# test needs no pymodbus install and always terminates.
+HOST=${HOST} python3 - <<'PY'
+import os, socket, struct
+host = os.environ['HOST']
+# FC05 write single coil: unit 1, coil 1 = ON (0xFF00)
+pdu = struct.pack('>BHH', 5, 1, 0xFF00)
+frame = struct.pack('>HHHB', 1, 0, len(pdu) + 1, 1) + pdu
+s = socket.create_connection((host, 15002), timeout=5)
+s.sendall(frame)
+resp = s.recv(64)
+s.close()
+if len(resp) < 8:
+    raise SystemExit(f'short Modbus response: {resp.hex()}')
+func = resp[7]
+if func & 0x80:
+    raise SystemExit(f'Modbus exception code {resp[8]}')
+print(f'Modbus FC05 accepted: {resp.hex()}')
 PY
-then
-  python3 - <<'PY'
-from pymodbus.client.sync import ModbusTcpClient
-cli = ModbusTcpClient('${HOST}', port=15002)
-cli.connect()
-cli.write_coil(1, True, unit=1)
-cli.close()
-PY
-else
-  echo "pymodbus not installed, using raw TCP fallback"
-  echo "WRITE HALT" | nc ${HOST} 15002 || true
-fi
 sleep 1
 STATUS=$(curl -s http://${HOST}/status | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status",""))')
 if [[ "$STATUS" != "HALTED" ]]; then

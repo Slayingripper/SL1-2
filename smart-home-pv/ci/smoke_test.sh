@@ -55,9 +55,11 @@ done
 echo "Testing admin/publish_telemetry"
 curl -s -X POST -H 'Content-Type: application/json' -d '{"power":12345}' http://172.20.0.65/admin/publish_telemetry || true
 sleep 2
-last=$(curl -s http://172.20.0.65/admin/mqtt_data | jq -r '.[-1]')
-echo "Last MQTT point: $last"
-if ! echo "$last" | jq -e '.power == 12345' >/dev/null; then
+# The controller republishes its own simulated reading every few seconds, so the
+# injected point is not necessarily the newest one - look for it in the tail.
+recent=$(curl -s http://172.20.0.65/admin/mqtt_data | jq -c '.[-10:]')
+echo "Recent MQTT points: $recent"
+if ! echo "$recent" | jq -e 'map(select(.power == 12345)) | length > 0' >/dev/null; then
   echo "published telemetry not found in admin/mqtt_data"
   exit 5
 fi

@@ -4,7 +4,6 @@ import axios from 'axios';
 import SystemOverview from './SystemOverview';
 import AreaMap from './AreaMap';
 import PowerChart from './PowerChart';
-import ModbusControl from './ModbusControl';
 import SecurityAlerts from './SecurityAlerts';
 import NotificationPopup from './NotificationPopup';
 import './Dashboard.css';
@@ -385,18 +384,10 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
               <span className={`nav-led nav-led-ok`} />
             </button>
             <button
-              className={`nav-item ${activeView === 'modbus' ? 'active' : ''}`}
-              onClick={() => handleViewChange('modbus')}
-            >
-              <span className="nav-index">04</span>
-              <span className="nav-label">Modbus Control</span>
-              <span className={`nav-led ${halted ? 'nav-led-crit' : 'nav-led-ok'}`} />
-            </button>
-            <button
               className={`nav-item ${activeView === 'security' ? 'active' : ''}`}
               onClick={() => handleViewChange('security')}
             >
-              <span className="nav-index">05</span>
+              <span className="nav-index">04</span>
               <span className="nav-label">Security Ops</span>
               <span className="nav-led nav-led-amb" />
             </button>
@@ -432,9 +423,6 @@ const Dashboard: React.FC<DashboardProps> = ({ token, onLogout }) => {
             )}
             {activeView === 'power' && (
               <PowerChart telemetryData={telemetryData} />
-            )}
-            {activeView === 'modbus' && (
-              <ModbusControl token={token} siteData={siteData} />
             )}
             {activeView === 'security' && (
               <SecurityAlerts token={token} telemetryData={telemetryData} systemStatus={systemStatus} />
