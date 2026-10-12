@@ -6,6 +6,7 @@
 :root {
   --sev-secure: #3fb950;
   --sev-guarded: #58a6ff;
+  --sev-medium: #d29922;
   --sev-elevated: #ffb000;
   --sev-critical: #f85149;
 }
@@ -68,6 +69,7 @@
 .kpi-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted, #7c8794); }
 .kpi-crit .kpi-value { color: var(--sev-critical); }
 .kpi-high .kpi-value { color: var(--sev-elevated); }
+.kpi-medium .kpi-value { color: var(--sev-medium); }
 
 /* ---- shared LED ---- */
 .posture-led {
@@ -118,6 +120,7 @@
 .vc { font-size: 12px; font-family: 'Courier New', monospace; color: var(--muted, #7c8794); }
 .vc.crit { color: var(--sev-critical); }
 .vc.high { color: var(--sev-elevated); }
+.vc.medium { color: var(--sev-medium); }
 
 .vector-last {
   font-size: 11px;

@@ -68,6 +68,10 @@
 .alert-stat.critical .stat-value { color: var(--crit); }
 .alert-stat.high { border-left: 3px solid #ff922b; }
 .alert-stat.high .stat-value { color: #ff922b; }
+.alert-stat.medium { border-left: 3px solid var(--warn); }
+.alert-stat.medium .stat-value { color: var(--warn); }
+.alert-stat.low { border-left: 3px solid var(--muted); }
+.alert-stat.low .stat-value { color: var(--muted); }
 .alert-stat.total { border-left: 3px solid var(--info); }
 .alert-stat.total .stat-value { color: var(--info); }
 

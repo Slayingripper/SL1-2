@@ -61,6 +61,12 @@ TICKET_RETENTION_MINUTES = int(os.getenv('TICKET_RETENTION_MINUTES', '60'))
 HOST_HOME_LOGS_DIR = os.getenv('HOST_HOME_LOGS_DIR', '/opt/pv-controller/home-logs')
 ADMIN_UI_LOG_FILE = os.path.join(HOST_HOME_LOGS_DIR, 'admin_dashboard_actions.log')
 
+# Scope the security-event feed to the caller's own login session. Each operator
+# therefore gets a clean board while the full log stays persisted for export.
+# Set to 0 to show the entire (all-users) event history instead.
+SECURITY_EVENTS_SESSION_SCOPED = os.getenv(
+    'SECURITY_EVENTS_SESSION_SCOPED', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+
 
 def _safe_name(value, fallback='item'):
     text = str(value or fallback).strip().lower()
@@ -658,9 +664,9 @@ class ChallengeState:
 
     def clear_alerts(self):
         """Wipe every alert store: security events, failed logins, anomalous
-        telemetry and the notification pop-up feed. Used when an admin logs in
-        so the dashboards always start from a clean slate. Returns the total
-        number of dropped alerts."""
+        telemetry and the notification pop-up feed. Returns the total number of
+        dropped alerts. Used only for an explicit incident-response/full wipe —
+        NOT on login, so the persisted SOC event log is never silently lost."""
         with self.lock:
             cleared = (len(self.security_events) + len(self.failed_logins)
                        + len(self.anomalous_data) + len(self.notifications))
@@ -677,6 +683,16 @@ class ChallengeState:
             self._save_security_events()
             self._save_failed_logins()
             self._save_anomalous_data()
+        return cleared
+
+    def clear_notifications(self):
+        """Reset only the transient HMI pop-up feed (dismissed automatically as
+        the operator starts a session). Security events, failed logins and
+        anomalous telemetry are intentionally preserved so the dashboards keep
+        showing the persisted incident history."""
+        with self.lock:
+            cleared = len(self.notifications)
+            self.notifications = []
         return cleared
 
     def _load_anomalous_data(self):
@@ -919,7 +935,11 @@ def generate_token(username, token_type='api', expires_in=1800, ip_address=None,
         'type': token_type,
         'role': role or token_type,
         'expires': time.time() + expires_in,
-        'created': time.time()
+        'created': time.time(),
+        # Marks where this operator's session starts. The security-event views
+        # are scoped to this boundary so each user gets a clean board while the
+        # underlying event log stays persisted for export / audit.
+        'session_started': datetime.now().isoformat()
     }
     # Store the originating IP (if provided) for token revocation / block enforcement
     if ip_address:
@@ -1979,16 +1999,16 @@ def admin_login():
                                  f'Admin login successful from {client_ip}',
                                  f'User {username} authenticated successfully',
                                  'Authentication Service', ip=client_ip)
-        # Operator takes over the console: start from a clean alert board so the
-        # dashboards don't show stale incidents from the previous session.
+        # Operator takes over the console: reset only the transient pop-up feed
+        # so the SOC event log / persisted incident history stays visible.
         cleared_alerts = 0
         try:
-            cleared_alerts = state.clear_alerts()
+            cleared_alerts = state.clear_notifications()
             write_action_log('alerts_cleared_on_login', actor=username,
                              details={'ip': client_ip, 'cleared': cleared_alerts})
-            logger.info(f"🧹 Alerts cleared on admin login by {username}: {cleared_alerts} entries")
+            logger.info(f"🧹 Notifications cleared on admin login by {username}: {cleared_alerts} entries")
         except Exception:
-            logger.exception('Failed to clear alerts on admin login')
+            logger.exception('Failed to clear notifications on admin login')
         logger.info(f"✓ Admin authenticated: {username}")
         return jsonify({"token": token, "username": username, "role": "admin",
                         "expires_in": 1800, "cleared_alerts": cleared_alerts})
@@ -2970,12 +2990,29 @@ def get_security_events():
     if not token_data:
         return jsonify({"error": "Invalid or expired token"}), 403
     
-    # Return security events
-    return jsonify({
-        "events": state.security_events[-50:],  # Last 50 events
-        "failed_logins_count": len(state.failed_logins),
-        "anomalous_data_count": len(state.anomalous_data)
+    # Session-scoped view: each operator only sees events raised after their own
+    # login, so a new user always starts with a clean board even if the previous
+    # session ended without an explicit logoff. The full log is still persisted
+    # and available through the export endpoint for the instructor/auditor.
+    session_started = token_data.get('session_started')
+    with state.lock:
+        all_events = list(state.security_events)
+        failed_logins_count = len(state.failed_logins)
+        anomalous_data_count = len(state.anomalous_data)
+
+    if SECURITY_EVENTS_SESSION_SCOPED and session_started:
+        all_events = [e for e in all_events
+                      if str(e.get('timestamp') or '') >= str(session_started)]
+    events = all_events[-50:]
+
+    response = jsonify({
+        "events": events,
+        "failed_logins_count": failed_logins_count,
+        "anomalous_data_count": anomalous_data_count
     })
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    return response
 
 
 @app.route("/api/admin/security/failed_logins")

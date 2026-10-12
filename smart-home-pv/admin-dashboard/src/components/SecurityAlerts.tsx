@@ -30,6 +30,16 @@ interface AnomalyDetection {
   unusualTraffic: boolean;
 }
 
+// Backend events may carry severity/category in any casing or with stray
+// whitespace. Normalise once so filters, counters and CSS classes all agree.
+const SEVERITIES = ['critical', 'high', 'medium', 'low'] as const;
+type Severity = (typeof SEVERITIES)[number];
+
+const normSeverity = (value: unknown): Severity => {
+  const s = String(value ?? '').trim().toLowerCase();
+  return (SEVERITIES as readonly string[]).includes(s) ? (s as Severity) : 'low';
+};
+
 const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData, systemStatus }) => {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [anomalies, setAnomalies] = useState<AnomalyDetection>({
@@ -144,19 +154,19 @@ const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData, s
         if (response.data.events) {
           setSecurityEvents(response.data.events);
           
-          // Generate alerts from security events (suspicious OR high/critical severity)
-          const eventAlerts: Alert[] = response.data.events
-            .filter((event: any) => event.suspicious || event.severity === 'critical' || event.severity === 'high')
-            .map((event: any) => ({
-              id: `event-${event.timestamp}`,
-              timestamp: event.timestamp,
-              severity: event.severity || 'medium',
-              category: event.category || 'Security Event',
-              message: event.message,
-              details: event.details,
-              source: event.source || 'Security Monitor',
-              ip: event.ip
-            }));
+          // Surface every event so medium/low severities are categorised and
+          // counted too (previously only suspicious/high/critical reached the
+          // alert list, leaving the medium/low counters permanently at 0).
+          const eventAlerts: Alert[] = response.data.events.map((event: any) => ({
+            id: `event-${event.timestamp}`,
+            timestamp: event.timestamp,
+            severity: normSeverity(event.severity),
+            category: event.category || 'Security Event',
+            message: event.message,
+            details: event.details,
+            source: event.source || 'Security Monitor',
+            ip: event.ip
+          }));
           
           if (eventAlerts.length > 0) {
             // Merge with existing alerts, avoiding duplicates by ID
@@ -283,7 +293,7 @@ const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData, s
   );
 
   const getSeverityLedClass = (severity: string) => {
-    switch (severity) {
+    switch (normSeverity(severity)) {
       case 'critical': return 'sev-led sev-critical';
       case 'high': return 'sev-led sev-high';
       case 'medium': return 'sev-led sev-medium';
@@ -293,7 +303,7 @@ const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData, s
   };
 
   const getSeverityClass = (severity: string) => {
-    return `alert-${severity}`;
+    return `alert-${normSeverity(severity)}`;
   };
 
   const acknowledgeAlert = (alertId: string) => {
@@ -616,8 +626,17 @@ const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData, s
   const filteredAlerts = showRecentOnly
     ? alerts.filter(a => new Date(a.timestamp).getTime() >= nowTs - recentThresholdMs)
     : alerts;
-  const criticalCount = filteredAlerts.filter(a => a.severity === 'critical').length;
-  const highCount = filteredAlerts.filter(a => a.severity === 'high').length;
+  const sevCounts = filteredAlerts.reduce(
+    (acc, a) => {
+      acc[normSeverity(a.severity)] += 1;
+      return acc;
+    },
+    { critical: 0, high: 0, medium: 0, low: 0 } as Record<Severity, number>
+  );
+  const criticalCount = sevCounts.critical;
+  const highCount = sevCounts.high;
+  const mediumCount = sevCounts.medium;
+  const lowCount = sevCounts.low;
 
   return (
     <div className="security-alerts-container">
@@ -634,6 +653,14 @@ const SecurityAlerts: React.FC<SecurityAlertsProps> = ({ token, telemetryData, s
           <div className="alert-stat high">
             <span className="stat-value">{highCount}</span>
             <span className="stat-label">High</span>
+          </div>
+          <div className="alert-stat medium">
+            <span className="stat-value">{mediumCount}</span>
+            <span className="stat-label">Medium</span>
+          </div>
+          <div className="alert-stat low">
+            <span className="stat-value">{lowCount}</span>
+            <span className="stat-label">Low</span>
           </div>
           <div className="alert-stat total">
             <span className="stat-value">{filteredAlerts.length}</span>

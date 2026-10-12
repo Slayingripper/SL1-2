@@ -26,28 +26,43 @@ const STALE_AFTER_S = 30;
 
 /* Map the backend's event categories onto the three attack surfaces of the
  * exercise: the web admin panel (brute force / phishing / injection), the MQTT
- * telemetry-and-control channel, and the Modbus/TCP ICS interface. */
+ * telemetry-and-control channel, and the Modbus/TCP ICS interface.
+ *
+ * Keys are lower-cased because the backend may emit a category in any casing;
+ * `vectorOf` normalises before lookup. Every category the controller can emit
+ * is covered here so no event silently falls out of the threat-vector counts. */
 const CATEGORY_VECTOR: Record<string, Vector> = {
-  Authentication: 'web',
-  'Rate Limiting': 'web',
-  'Web Application Security': 'web',
-  Phishing: 'web',
-  'Network Access': 'web',
-  'System Control': 'mqtt',
-  'Data Integrity': 'mqtt',
-  'ICS Protocol': 'modbus',
+  authentication: 'web',
+  'rate limiting': 'web',
+  'web application security': 'web',
+  phishing: 'web',
+  'suspicious email': 'web',
+  'suspicious behavior': 'web',
+  'network access': 'web',
+  'file system security': 'web',
+  'incident response': 'web',
+  'system control': 'mqtt',
+  'data integrity': 'mqtt',
+  'anomaly detection': 'mqtt',
+  'system health': 'mqtt',
+  'arp spoofing': 'modbus',
+  'ics protocol': 'modbus',
 };
 
 const vectorOf = (ev: SecEvent): Vector | null => {
-  if (ev.category && CATEGORY_VECTOR[ev.category]) return CATEGORY_VECTOR[ev.category];
+  const category = (ev.category || '').trim().toLowerCase();
+  if (category && CATEGORY_VECTOR[category]) return CATEGORY_VECTOR[category];
   const src = (ev.source || '').toLowerCase();
-  if (src.includes('modbus')) return 'modbus';
-  if (src.includes('mqtt')) return 'mqtt';
-  if (src.includes('auth') || src.includes('phish') || src.includes('login')) return 'web';
+  if (src.includes('modbus') || src.includes('arp')) return 'modbus';
+  if (src.includes('mqtt') || src.includes('telemetry')) return 'mqtt';
+  if (src.includes('auth') || src.includes('phish') || src.includes('login') || src.includes('web')) return 'web';
   return null;
 };
 
 const SEV_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+
+/* Normalise severity so casing/whitespace differences never zero out a counter. */
+const sevKey = (s?: string): string => (s || '').trim().toLowerCase();
 
 /* posture rank: -1 secure, 0/1 guarded, 2 elevated, 3 critical */
 const rankToLevel = (rank: number): { key: string; label: string } => {
@@ -132,17 +147,18 @@ const SecurityPosture: React.FC<SecurityPostureProps> = ({ token, systemStatus, 
 
   const vectorStat = (v: Vector) => {
     const list = byVector[v];
-    const critical = list.filter(e => e.severity === 'critical').length;
-    const high = list.filter(e => e.severity === 'high').length;
+    const critical = list.filter(e => sevKey(e.severity) === 'critical').length;
+    const high = list.filter(e => sevKey(e.severity) === 'high').length;
+    const medium = list.filter(e => sevKey(e.severity) === 'medium').length;
     let rank = -1;
     let last: SecEvent | undefined;
     for (const e of list) {
-      rank = Math.max(rank, SEV_RANK[e.severity] ?? 0);
+      rank = Math.max(rank, SEV_RANK[sevKey(e.severity)] ?? 0);
       if (!last || new Date(e.timestamp) > new Date(last.timestamp)) last = e;
     }
     // Modbus/ICS or MQTT-driven HALT is a live compromise, force critical.
     if (v !== 'web' && halted) rank = Math.max(rank, 3);
-    return { total: list.length, critical, high, rank, last, level: rankToLevel(rank) };
+    return { total: list.length, critical, high, medium, rank, last, level: rankToLevel(rank) };
   };
 
   const vectors: Vector[] = ['web', 'mqtt', 'modbus'];
@@ -150,8 +166,9 @@ const SecurityPosture: React.FC<SecurityPostureProps> = ({ token, systemStatus, 
     Vector, ReturnType<typeof vectorStat>
   >;
 
-  const totalCritical = events.filter(e => e.severity === 'critical').length;
-  const totalHigh = events.filter(e => e.severity === 'high').length;
+  const totalCritical = events.filter(e => sevKey(e.severity) === 'critical').length;
+  const totalHigh = events.filter(e => sevKey(e.severity) === 'high').length;
+  const totalMedium = events.filter(e => sevKey(e.severity) === 'medium').length;
   const last24h = events.filter(
     e => Date.now() - new Date(e.timestamp).getTime() < 24 * 3600 * 1000
   ).length;
@@ -208,6 +225,10 @@ const SecurityPosture: React.FC<SecurityPostureProps> = ({ token, systemStatus, 
             <span className="kpi-value">{totalHigh}</span>
             <span className="kpi-label">High</span>
           </div>
+          <div className="kpi kpi-medium">
+            <span className="kpi-value">{totalMedium}</span>
+            <span className="kpi-label">Medium</span>
+          </div>
           <div className="kpi">
             <span className="kpi-value">{blockedCount}</span>
             <span className="kpi-label">Blocked IPs</span>
@@ -238,6 +259,7 @@ const SecurityPosture: React.FC<SecurityPostureProps> = ({ token, systemStatus, 
               <div className="vector-counts">
                 <span className="vc crit">{s.critical} crit</span>
                 <span className="vc high">{s.high} high</span>
+                <span className="vc medium">{s.medium} med</span>
                 <span className="vc total">{s.total} total</span>
               </div>
               <div className="vector-last">
