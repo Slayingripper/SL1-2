@@ -68,7 +68,7 @@ const DEFAULT_SETTINGS: DefenseSettings = {
   alert_notification_tier: 'critical',
   ip_blacklist_enabled: false,
   ip_blacklist: [],
-  inactivity_timeout_minutes: 5,
+  inactivity_timeout_minutes: 10,
 };
 
 const severityClass = (sev?: string | null) => {
@@ -221,7 +221,7 @@ const BlueTeamDashboard: React.FC<BlueTeamDashboardProps> = ({ token, onLogout }
   const [events, setEvents] = useState<SecurityEvent[]>([]);
   const [plantStatus, setPlantStatus] = useState('UNKNOWN');
   const [now, setNow] = useState(new Date());
-  const [sessionLeft, setSessionLeft] = useState(5 * 60);
+  const [sessionLeft, setSessionLeft] = useState(10 * 60);
   const [applyFlash, setApplyFlash] = useState('');
   const [tab, setTab] = useState<'defenses' | 'users' | 'tickets'>('defenses');
   const [users, setUsers] = useState<OperatorUser[]>([]);

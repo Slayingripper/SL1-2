@@ -810,7 +810,7 @@ BLUETEAM_DEFAULT_SETTINGS = {
     'blocked_ips_manual': [],
     'ip_blacklist_enabled': False,
     'ip_blacklist': [],
-    'inactivity_timeout_minutes': 5,
+    'inactivity_timeout_minutes': 10,
 }
 
 # Built-in mitigation signatures used when the blue team enables a control.
@@ -937,7 +937,7 @@ def blueteam_inactivity_expired():
     """Return True if the blue team has been inactive beyond the timeout."""
     if not blueteam_defense['active']:
         return False
-    timeout_min = int(blueteam_defense['settings'].get('inactivity_timeout_minutes', 5))
+    timeout_min = int(blueteam_defense['settings'].get('inactivity_timeout_minutes', 10))
     return (time.time() - blueteam_defense['last_activity']) > timeout_min * 60
 
 
@@ -2023,7 +2023,7 @@ def blueteam_get_settings():
     return jsonify({
         'active': blueteam_defense['active'],
         'settings': blueteam_defense['settings'],
-        'inactivity_timeout_minutes': blueteam_defense['settings'].get('inactivity_timeout_minutes', 5),
+        'inactivity_timeout_minutes': blueteam_defense['settings'].get('inactivity_timeout_minutes', 10),
         'last_activity': blueteam_defense['last_activity'],
     })
 
@@ -2209,7 +2209,7 @@ def blueteam_defense_status():
         'controls_enabled': sum(1 for k, v in blueteam_defense['settings'].items()
                                 if isinstance(v, bool) and v and k != 'login_rate_limit'),
         'alert_tier': blueteam_defense['settings'].get('alert_notification_tier', 'low'),
-        'inactivity_timeout_minutes': blueteam_defense['settings'].get('inactivity_timeout_minutes', 5),
+        'inactivity_timeout_minutes': blueteam_defense['settings'].get('inactivity_timeout_minutes', 10),
         'telemetry_validation': bool(
             blueteam_defense['active']
             and blueteam_defense['settings'].get('telemetry_validation')),
