@@ -726,14 +726,18 @@ state = ChallengeState()
 # SYSTEM CONFIGURATION
 # ============================================================================
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin123"
+DEFAULT_ADMIN_PASSWORD = "admin123"
+ADMIN_PASSWORD = DEFAULT_ADMIN_PASSWORD
 # Additional HMI administrator accounts. They get the same admin role as the
 # primary account (full dashboard access, same tokens/permissions); only the
 # credentials differ. Passwords are overridable via env for lab deployments.
-ADMIN_EXTRA_USERS = {
+# Kept as a separate defaults dict so a blue-team credential reset can restore
+# exactly what was configured at startup (env values included).
+ADMIN_EXTRA_USERS_DEFAULTS = {
     'admin2': os.getenv('ADMIN2_PASSWORD', 'admin123'),
     'admin3': os.getenv('ADMIN3_PASSWORD', 'admin123'),
 }
+ADMIN_EXTRA_USERS = dict(ADMIN_EXTRA_USERS_DEFAULTS)
 
 def _admin_accounts():
     """username -> password for every account with the admin role."""
@@ -749,7 +753,8 @@ WIFI_PASSWORD = "super-secret-123"     # Discovered via /wifi_scan, but NOT admi
 
 # Blue team operator credentials
 BLUETEAM_USERNAME = "blueteam"
-BLUETEAM_PASSWORD = "blueTeam123"
+DEFAULT_BLUETEAM_PASSWORD = "blueTeam123"
+BLUETEAM_PASSWORD = DEFAULT_BLUETEAM_PASSWORD
 
 # Persist a user-chosen blue-team password across restarts. Loaded at startup,
 # written by the "change password" endpoint. Stored in the same directory so it
@@ -807,6 +812,25 @@ def _save_admin_password(password):
         logger.exception('Failed to persist admin credentials')
 
 _load_admin_password()
+
+def _restore_default_credentials():
+    """Revert every blue-team-rotated password back to the startup defaults.
+
+    Mirrors the defense reset: the operator/admin passwords blue changed are
+    restored (env-configured defaults included) and the persisted credential
+    files are deleted so the reverted passwords also survive a restart.
+    """
+    global ADMIN_PASSWORD, BLUETEAM_PASSWORD
+    ADMIN_PASSWORD = DEFAULT_ADMIN_PASSWORD
+    ADMIN_EXTRA_USERS.clear()
+    ADMIN_EXTRA_USERS.update(ADMIN_EXTRA_USERS_DEFAULTS)
+    BLUETEAM_PASSWORD = DEFAULT_BLUETEAM_PASSWORD
+    for path in (ADMIN_CRED_FILE, BLUETEAM_CRED_FILE):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            logger.exception(f'Failed to remove persisted credential file {path}')
 
 # ── Blue-team defense state ──────────────────────────────────────────────
 # Populated when the defender logs in; cleared on logout so the system
@@ -962,7 +986,7 @@ def blueteam_inactivity_expired():
 
 
 def blueteam_auto_logout():
-    """Force the blue-team session to end and reset all defenses."""
+    """Force the blue-team session to end and reset all defenses/credentials."""
     blueteam_defense['active'] = False
     blueteam_defense['active_since'] = 0.0
     blueteam_defense['settings'] = dict(BLUETEAM_DEFAULT_SETTINGS)
@@ -971,10 +995,13 @@ def blueteam_auto_logout():
     if token and token in active_tokens:
         del active_tokens[token]
     blueteam_defense['active_token'] = None
-    logger.info("🔒 Blue-team session auto-expired (inactivity) — defenses reset")
+    _restore_default_credentials()
+    logger.info("🔒 Blue-team session auto-expired (inactivity) — defenses and credentials reset")
     try:
         write_action_log('blueteam_auto_logout',
-                         actor='blueteam', details={'reason': 'inactivity_timeout'})
+                         actor='blueteam',
+                         details={'reason': 'inactivity_timeout',
+                                  'credentials': 'restored_defaults'})
     except Exception:
         pass
 
@@ -2096,11 +2123,12 @@ def blueteam_logout():
         return jsonify({'error': 'Unauthorized'}), 401
 
     blueteam_auto_logout()
-    logger.info("Blue-team defense reset — system reverted to insecure defaults")
+    logger.info("Blue-team defense reset — system reverted to insecure defaults, credentials restored")
     try:
         write_action_log('blueteam_logout_reset',
                          actor=token_data.get('username', 'unknown'),
-                         details={'status': 'all_defenses_cleared'})
+                         details={'status': 'all_defenses_cleared',
+                                  'credentials': 'restored_defaults'})
     except Exception:
         pass
     # The auto_logout already revokes the stored blueteam token; revoke this one too

@@ -431,7 +431,7 @@ const BlueTeamDashboard: React.FC<BlueTeamDashboardProps> = ({ token, onLogout }
           <span className="bt-state-dot" />
           DEFENSE SYSTEM {defenseActive ? 'ACTIVE' : 'INACTIVE'} · {controlsEngaged} CONTROLS ENGAGED
         </div>
-        <div className="bt-autoreset">AUTO-RESET ON LOGOFF OR {settings.inactivity_timeout_minutes} MIN INACTIVITY</div>
+        <div className="bt-autoreset">DEFENSES &amp; PASSWORDS AUTO-RESET ON LOGOFF OR {settings.inactivity_timeout_minutes} MIN INACTIVITY</div>
       </div>
 
       <nav className="bt-tabs">
@@ -769,7 +769,7 @@ const BlueTeamDashboard: React.FC<BlueTeamDashboardProps> = ({ token, onLogout }
       )}
 
       <footer className="bt-footer">
-        <div>Green Team Training · Defenses auto-reset on logoff / {settings.inactivity_timeout_minutes} min inactivity</div>
+        <div>Green Team Training · Defenses &amp; passwords auto-reset on logoff / {settings.inactivity_timeout_minutes} min inactivity</div>
         {tab === 'defenses' && (
           <div className="bt-footer-right">
             {applyFlash && <span className={`bt-apply-flash ${applyFlash.includes('FAILED') ? 'err' : ''}`}>{applyFlash}</span>}
